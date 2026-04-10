@@ -21,6 +21,7 @@ import (
 	"github.com/mcd/lastwatt/internal/engine"
 	"github.com/mcd/lastwatt/internal/forecast"
 	"github.com/mcd/lastwatt/internal/monitor"
+	"github.com/mcd/lastwatt/internal/scheduler"
 	"github.com/mcd/lastwatt/internal/state"
 )
 
@@ -145,6 +146,13 @@ func daemonCmd() *cobra.Command {
 			// Start Ecobee keepalive to prevent OAuth session from going stale
 			go ecobee.StartKeepAlive(ctx, 10*time.Minute, store, log)
 
+			// Start schedule engine
+			var sched *scheduler.Scheduler
+			if len(cfg.Schedules) > 0 {
+				sched = scheduler.New(cfg.Schedules, eng, store, log)
+				go sched.Run(ctx)
+			}
+
 			mon := monitor.New(monitor.Config{
 				Host:             cfg.Monitor.Host,
 				Interval:         cfg.Monitor.Interval,
@@ -176,6 +184,11 @@ func daemonCmd() *cobra.Command {
 						go func() {
 							if err := eng.RunRecipe(ctx, "restore", cfg.Restore); err != nil {
 								log.Error("restore recipe failed", "error", err)
+							}
+							// If a schedule is active, reapply its actions
+							// (e.g., keep water heater off during peak hours)
+							if sched != nil {
+								sched.ReapplyActive(ctx)
 							}
 						}()
 					}
