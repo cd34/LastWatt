@@ -14,7 +14,17 @@ type Config struct {
 	StateFile string         `yaml:"state_file"`
 	Curtail   []ActionStep   `yaml:"curtail"`
 	Restore   []ActionStep   `yaml:"restore"`
+	Schedules []Schedule     `yaml:"schedules,omitempty"`
 	Overrides []OverrideRule `yaml:"overrides,omitempty"`
+}
+
+type Schedule struct {
+	Name    string       `yaml:"name"`
+	Days    []string     `yaml:"days"`
+	Start   string       `yaml:"start"`
+	Stop    string       `yaml:"stop"`
+	Actions []ActionStep `yaml:"actions"`
+	Restore []ActionStep `yaml:"restore"`
 }
 
 type LocationConfig struct {
