@@ -1,0 +1,62 @@
+monitor:
+  host: 192.168.1.X        # device on grid power — goes offline when grid is down
+  interval: 5s
+  fail_threshold: 3        # consecutive ping failures before "curtailed"
+  recover_threshold: 2     # consecutive ping successes before "normal"
+
+location:
+  lat: 0.0000              # your latitude
+  lon: 0.0000              # your longitude
+  forecast_interval: 30m
+
+state_file: /var/lib/lastwatt/state.json
+
+# Actions to run when grid power is lost (top to bottom)
+curtail:
+  - action: ecobee.read_mode        # save current thermostat state
+  - action: ecobee.set_hold
+    params:
+      heat_temp: 55
+      cool_temp: 85
+  - action: gpio.set
+    params:
+      pin: "17"
+      state: off
+      label: water_heater
+  - action: gpio.set
+    params:
+      pin: "27"
+      state: on
+      label: curtail_led
+  # - action: shelly.set
+  #   params:
+  #     host: 192.168.1.X
+  #     state: off
+  #     label: poe_switch
+
+# Actions to run when grid power returns (top to bottom)
+restore:
+  - action: ecobee.resume
+  - action: gpio.set
+    params:
+      pin: "17"
+      state: on
+      label: water_heater
+  - action: gpio.set
+    params:
+      pin: "27"
+      state: off
+      label: curtail_led
+  # - action: shelly.set
+  #   params:
+  #     host: 192.168.1.X
+  #     state: on
+  #     label: poe_switch
+
+# Future: override rules for special cases
+# overrides:
+#   - trigger: flow.detected
+#     actions:
+#       - action: gpio.set
+#         params: { pin: "17", state: on }
+#     revert_after: 10m
