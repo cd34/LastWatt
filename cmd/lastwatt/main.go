@@ -13,7 +13,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/mcd/lastwatt/internal/actions"
-	_ "github.com/mcd/lastwatt/internal/actions/ecobee"
+	"github.com/mcd/lastwatt/internal/actions/ecobee"
 	_ "github.com/mcd/lastwatt/internal/actions/gpio"
 	_ "github.com/mcd/lastwatt/internal/actions/shelly"
 	"github.com/mcd/lastwatt/internal/actions/tempest"
@@ -101,6 +101,25 @@ func daemonCmd() *cobra.Command {
 			ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 			defer cancel()
 
+			// Reload state from disk on SIGUSR1 (sent by ecobee-auth after updating credentials)
+			reloadCh := make(chan os.Signal, 1)
+			signal.Notify(reloadCh, syscall.SIGUSR1)
+			go func() {
+				for {
+					select {
+					case <-ctx.Done():
+						return
+					case <-reloadCh:
+						log.Info("received SIGUSR1, reloading state from disk")
+						if err := store.Reload(); err != nil {
+							log.Error("state reload failed", "error", err)
+						} else {
+							log.Info("state reloaded successfully")
+						}
+					}
+				}
+			}()
+
 			// Start Tempest weather listener in background
 			tl := tempest.GetListener(log)
 			go func() {
@@ -122,6 +141,9 @@ func daemonCmd() *cobra.Command {
 					}
 				}()
 			}
+
+			// Start Ecobee keepalive to prevent OAuth session from going stale
+			go ecobee.StartKeepAlive(ctx, 30*time.Minute, store, log)
 
 			mon := monitor.New(monitor.Config{
 				Host:             cfg.Monitor.Host,
@@ -247,7 +269,10 @@ func actionCmd() *cobra.Command {
 				return err
 			}
 
-			return a.Execute(cmd.Context(), params, store)
+			if err := a.Execute(cmd.Context(), params, store); err != nil {
+				return err
+			}
+			return store.Flush()
 		},
 	}
 	cmd.Flags().StringSliceP("param", "p", nil, "action parameters (key=value)")
@@ -332,7 +357,47 @@ func ecobeeAuthCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			return a.Execute(cmd.Context(), nil, store)
+			if err := a.Execute(cmd.Context(), nil, store); err != nil {
+				return err
+			}
+			if err := store.Flush(); err != nil {
+				return err
+			}
+			// Signal the running daemon to reload state from disk
+			signalDaemon(syscall.SIGUSR1)
+			return nil
 		},
+	}
+}
+
+// signalDaemon sends a signal to any running lastwatt daemon process.
+func signalDaemon(sig syscall.Signal) {
+	myPID := os.Getpid()
+	entries, err := os.ReadDir("/proc")
+	if err != nil {
+		return
+	}
+	for _, e := range entries {
+		if !e.IsDir() {
+			continue
+		}
+		var pid int
+		if _, err := fmt.Sscanf(e.Name(), "%d", &pid); err != nil || pid == myPID {
+			continue
+		}
+		cmdline, err := os.ReadFile(fmt.Sprintf("/proc/%d/cmdline", pid))
+		if err != nil {
+			continue
+		}
+		// cmdline is null-separated; check if this is a lastwatt daemon process
+		parts := strings.Split(string(cmdline), "\x00")
+		if len(parts) >= 2 && strings.HasSuffix(parts[0], "lastwatt") && parts[1] == "daemon" {
+			proc, err := os.FindProcess(pid)
+			if err == nil {
+				proc.Signal(sig)
+				fmt.Printf("Signaled running daemon (PID %d) to reload state.\n", pid)
+			}
+			return
+		}
 	}
 }
