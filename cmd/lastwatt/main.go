@@ -143,7 +143,7 @@ func daemonCmd() *cobra.Command {
 			}
 
 			// Start Ecobee keepalive to prevent OAuth session from going stale
-			go ecobee.StartKeepAlive(ctx, 30*time.Minute, store, log)
+			go ecobee.StartKeepAlive(ctx, 10*time.Minute, store, log)
 
 			mon := monitor.New(monitor.Config{
 				Host:             cfg.Monitor.Host,

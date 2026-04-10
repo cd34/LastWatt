@@ -15,6 +15,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/pquerna/otp/totp"
 	"golang.org/x/term"
 
 	"github.com/mcd/lastwatt/internal/actions"
@@ -49,48 +50,61 @@ func init() {
 var apiClient = &http.Client{Timeout: 30 * time.Second}
 
 // StartKeepAlive runs a background loop that proactively re-authenticates at
-// the given interval, keeping the OAuth session (token + cookies) from going
-// stale. It also polls the thermostat to verify the token works.
+// the given interval, keeping the Auth0 session cookies from going stale.
 func StartKeepAlive(ctx context.Context, interval time.Duration, store actions.StateStore, log *slog.Logger) {
 	log.Info("ecobee keepalive starting", "interval", interval)
 
-	ticker := time.NewTicker(interval)
-	defer ticker.Stop()
+	// Use a timer so we can fire immediately on first tick
+	timer := time.NewTimer(0)
+	defer timer.Stop()
 
 	for {
 		select {
 		case <-ctx.Done():
 			log.Info("ecobee keepalive stopped")
 			return
-		case <-ticker.C:
-			// Proactively re-authenticate to keep cookies fresh,
-			// regardless of whether the token is near expiry.
-			username, _ := store.Get("ecobee.username")
-			password, _ := store.Get("ecobee.password")
-			if username == "" || password == "" {
-				log.Warn("ecobee keepalive: no stored credentials, skipping")
-				continue
-			}
-
-			newToken, newExpires, err := authenticate(username, password, nil, store)
-			if err != nil {
-				log.Warn("ecobee keepalive refresh failed", "error", err)
-				continue
-			}
-
-			expiry := time.Now().Add(time.Duration(newExpires) * time.Second)
-			store.Set("ecobee.access_token", newToken)
-			store.Set("ecobee.token_expires", expiry.Format(time.RFC3339))
-			log.Info("ecobee keepalive refreshed token", "expires", expiry.Format(time.RFC3339))
-
-			// Also poll thermostat to verify the token works
-			action := &readModeAction{}
-			if err := action.Execute(ctx, nil, store); err != nil {
-				log.Warn("ecobee keepalive poll failed", "error", err)
-			} else {
-				log.Debug("ecobee keepalive poll ok")
-			}
+		case <-timer.C:
+			keepAliveOnce(store, log)
+			timer.Reset(interval)
 		}
+	}
+}
+
+func keepAliveOnce(store actions.StateStore, log *slog.Logger) {
+	username, _ := store.Get("ecobee.username")
+	password, _ := store.Get("ecobee.password")
+	if username == "" || password == "" {
+		log.Warn("ecobee keepalive: no stored credentials, skipping")
+		return
+	}
+
+	mfaCallback := totpCallback(store)
+
+	newToken, newExpires, err := authenticate(username, password, mfaCallback, store)
+	if err != nil {
+		log.Warn("ecobee keepalive session refresh failed", "error", err)
+		return
+	}
+
+	expiry := time.Now().Add(time.Duration(newExpires) * time.Second)
+	store.Set("ecobee.access_token", newToken)
+	store.Set("ecobee.token_expires", expiry.Format(time.RFC3339))
+	log.Info("ecobee keepalive refreshed token", "expires", expiry.Format(time.RFC3339))
+}
+
+// totpCallback returns an MFA callback that generates TOTP codes from the
+// stored secret. Returns nil if no secret is configured.
+func totpCallback(store actions.StateStore) MFACallback {
+	secret, ok := store.Get("ecobee.totp_secret")
+	if !ok || secret == "" {
+		return nil
+	}
+	return func() (string, error) {
+		code, err := totp.GenerateCode(secret, time.Now())
+		if err != nil {
+			return "", fmt.Errorf("TOTP generation failed: %w", err)
+		}
+		return code, nil
 	}
 }
 
@@ -304,7 +318,7 @@ func getToken(store actions.StateStore) (string, error) {
 			if username == "" || password == "" {
 				return "", fmt.Errorf("ecobee credentials missing — run 'lastwatt ecobee-auth' again")
 			}
-			newToken, newExpires, err := authenticate(username, password, nil, store)
+			newToken, newExpires, err := authenticate(username, password, totpCallback(store), store)
 			if err != nil {
 				return "", fmt.Errorf("token refresh failed: %w", err)
 			}
@@ -372,7 +386,7 @@ func apiRequestWithRefresh(ctx context.Context, method, endpoint string, store a
 		username, _ := store.Get("ecobee.username")
 		password, _ := store.Get("ecobee.password")
 		if username != "" && password != "" {
-			newToken, newExpires, authErr := authenticate(username, password, nil, store)
+			newToken, newExpires, authErr := authenticate(username, password, totpCallback(store), store)
 			if authErr == nil {
 				expiry := time.Now().Add(time.Duration(newExpires) * time.Second)
 				store.Set("ecobee.access_token", newToken)
@@ -414,14 +428,26 @@ func (a *authAction) Execute(ctx context.Context, params map[string]any, store a
 
 	fmt.Println("Authenticating...")
 
-	mfaPrompt := func() (string, error) {
-		var code string
-		fmt.Print("Enter MFA code from authenticator app: ")
-		fmt.Scanln(&code)
-		return code, nil
+	// Use stored TOTP secret if available, otherwise prompt
+	var mfaCallback MFACallback
+	if cb := totpCallback(store); cb != nil {
+		mfaCallback = func() (string, error) {
+			code, err := cb()
+			if err == nil {
+				fmt.Println("MFA code generated automatically from stored TOTP secret.")
+			}
+			return code, err
+		}
+	} else {
+		mfaCallback = func() (string, error) {
+			var code string
+			fmt.Print("Enter MFA code from authenticator app: ")
+			fmt.Scanln(&code)
+			return code, nil
+		}
 	}
 
-	token, expiresIn, err := authenticate(username, password, mfaPrompt, store)
+	token, expiresIn, err := authenticate(username, password, mfaCallback, store)
 	if err != nil {
 		return fmt.Errorf("authentication failed: %w", err)
 	}
@@ -431,6 +457,22 @@ func (a *authAction) Execute(ctx context.Context, params map[string]any, store a
 	store.Set("ecobee.token_expires", expiry.Format(time.RFC3339))
 	store.Set("ecobee.username", username)
 	store.Set("ecobee.password", password)
+
+	// Prompt for TOTP secret to enable automatic MFA
+	if _, ok := store.Get("ecobee.totp_secret"); !ok {
+		fmt.Print("Enter TOTP secret for automatic MFA (or press Enter to skip): ")
+		var secret string
+		fmt.Scanln(&secret)
+		if secret != "" {
+			// Validate the secret by generating a code
+			if _, err := totp.GenerateCode(secret, time.Now()); err != nil {
+				fmt.Printf("Warning: invalid TOTP secret (%v), not saved.\n", err)
+			} else {
+				store.Set("ecobee.totp_secret", secret)
+				fmt.Println("TOTP secret saved — daemon can now handle MFA automatically.")
+			}
+		}
+	}
 
 	fmt.Printf("Ecobee authentication successful! Token expires in %dh.\n", expiresIn/3600)
 	return nil
