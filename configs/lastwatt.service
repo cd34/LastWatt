@@ -1,0 +1,26 @@
+[Unit]
+Description=LastWatt Grid Curtailment Daemon
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=/home/mcd/lastwatt/lastwatt daemon --config /home/mcd/lastwatt/config.yaml
+Restart=always
+RestartSec=10
+User=mcd
+Group=mcd
+
+# Allow unprivileged ICMP ping
+AmbientCapabilities=CAP_NET_RAW
+
+# State directory
+StateDirectory=lastwatt
+
+# Hardening
+NoNewPrivileges=true
+ProtectSystem=strict
+ReadWritePaths=/var/lib/lastwatt
+
+[Install]
+WantedBy=multi-user.target
