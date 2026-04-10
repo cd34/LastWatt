@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"net/http/cookiejar"
 	"net/url"
@@ -46,6 +47,52 @@ func init() {
 }
 
 var apiClient = &http.Client{Timeout: 30 * time.Second}
+
+// StartKeepAlive runs a background loop that proactively re-authenticates at
+// the given interval, keeping the OAuth session (token + cookies) from going
+// stale. It also polls the thermostat to verify the token works.
+func StartKeepAlive(ctx context.Context, interval time.Duration, store actions.StateStore, log *slog.Logger) {
+	log.Info("ecobee keepalive starting", "interval", interval)
+
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			log.Info("ecobee keepalive stopped")
+			return
+		case <-ticker.C:
+			// Proactively re-authenticate to keep cookies fresh,
+			// regardless of whether the token is near expiry.
+			username, _ := store.Get("ecobee.username")
+			password, _ := store.Get("ecobee.password")
+			if username == "" || password == "" {
+				log.Warn("ecobee keepalive: no stored credentials, skipping")
+				continue
+			}
+
+			newToken, newExpires, err := authenticate(username, password, nil, store)
+			if err != nil {
+				log.Warn("ecobee keepalive refresh failed", "error", err)
+				continue
+			}
+
+			expiry := time.Now().Add(time.Duration(newExpires) * time.Second)
+			store.Set("ecobee.access_token", newToken)
+			store.Set("ecobee.token_expires", expiry.Format(time.RFC3339))
+			log.Info("ecobee keepalive refreshed token", "expires", expiry.Format(time.RFC3339))
+
+			// Also poll thermostat to verify the token works
+			action := &readModeAction{}
+			if err := action.Execute(ctx, nil, store); err != nil {
+				log.Warn("ecobee keepalive poll failed", "error", err)
+			} else {
+				log.Debug("ecobee keepalive poll ok")
+			}
+		}
+	}
+}
 
 // MFACallback prompts for a TOTP code and returns it.
 type MFACallback func() (string, error)

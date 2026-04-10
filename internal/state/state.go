@@ -78,6 +78,26 @@ func (s *Store) Flush() error {
 	return nil
 }
 
+// Reload re-reads state from disk, picking up changes made by other processes.
+func (s *Store) Reload() error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	data, err := os.ReadFile(s.path)
+	if err != nil {
+		return fmt.Errorf("reloading state: %w", err)
+	}
+	var loaded storeData
+	if err := json.Unmarshal(data, &loaded); err != nil {
+		return fmt.Errorf("parsing state on reload: %w", err)
+	}
+	if loaded.Values == nil {
+		loaded.Values = make(map[string]string)
+	}
+	s.data = loaded
+	s.dirty = false
+	return nil
+}
+
 func (s *Store) flushLoop() {
 	ticker := time.NewTicker(1 * time.Second)
 	defer ticker.Stop()
