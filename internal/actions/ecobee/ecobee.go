@@ -486,7 +486,7 @@ func (a *readModeAction) Validate(map[string]any) error { return nil }
 
 func (a *readModeAction) Execute(ctx context.Context, params map[string]any, store actions.StateStore) error {
 	sel := url.Values{
-		"json": {`{"selection":{"selectionType":"registered","selectionMatch":"","includeRuntime":true,"includeSettings":true}}`},
+		"json": {`{"selection":{"selectionType":"registered","selectionMatch":"","includeRuntime":true,"includeSettings":true,"includeEvents":true}}`},
 	}
 	endpoint := thermostatURL + "?" + sel.Encode()
 
@@ -505,6 +505,10 @@ func (a *readModeAction) Execute(ctx context.Context, params map[string]any, sto
 				DesiredCool       int `json:"desiredCool"`
 				ActualTemperature int `json:"actualTemperature"`
 			} `json:"runtime"`
+			Events []struct {
+				Type    string `json:"type"`
+				Running bool   `json:"running"`
+			} `json:"events"`
 		} `json:"thermostatList"`
 	}
 	if err := json.Unmarshal(body, &result); err != nil {
@@ -520,11 +524,21 @@ func (a *readModeAction) Execute(ctx context.Context, params map[string]any, sto
 	store.Set("ecobee.saved_heat", fmt.Sprintf("%d", t.Runtime.DesiredHeat))
 	store.Set("ecobee.saved_cool", fmt.Sprintf("%d", t.Runtime.DesiredCool))
 
-	fmt.Printf("Thermostat mode: %s, heat: %.1f°F, cool: %.1f°F, current: %.1f°F\n",
+	vacation := false
+	for _, ev := range t.Events {
+		if ev.Type == "vacation" && ev.Running {
+			vacation = true
+			break
+		}
+	}
+	store.Set("ecobee.vacation_active", fmt.Sprintf("%t", vacation))
+
+	fmt.Printf("Thermostat mode: %s, heat: %.1f°F, cool: %.1f°F, current: %.1f°F, vacation: %t\n",
 		t.Settings.HvacMode,
 		float64(t.Runtime.DesiredHeat)/10,
 		float64(t.Runtime.DesiredCool)/10,
 		float64(t.Runtime.ActualTemperature)/10,
+		vacation,
 	)
 
 	return nil
@@ -546,6 +560,11 @@ func (a *setHoldAction) Validate(params map[string]any) error {
 }
 
 func (a *setHoldAction) Execute(ctx context.Context, params map[string]any, store actions.StateStore) error {
+	if v, _ := store.Get("ecobee.vacation_active"); v == "true" {
+		fmt.Println("Thermostat is in vacation mode — skipping hold")
+		return nil
+	}
+
 	// Ecobee uses temp * 10 (e.g., 550 = 55.0°F)
 	heatTemp := toInt(params["heat_temp"]) * 10
 	coolTemp := toInt(params["cool_temp"]) * 10
@@ -583,6 +602,11 @@ func (a *resumeAction) Name() string                  { return "ecobee.resume" }
 func (a *resumeAction) Validate(map[string]any) error { return nil }
 
 func (a *resumeAction) Execute(ctx context.Context, params map[string]any, store actions.StateStore) error {
+	if v, _ := store.Get("ecobee.vacation_active"); v == "true" {
+		fmt.Println("Thermostat is in vacation mode — skipping resume")
+		return nil
+	}
+
 	body := map[string]any{
 		"selection": map[string]any{
 			"selectionType":  "registered",
