@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"math/rand/v2"
 	"strings"
 	"time"
 
@@ -31,9 +32,11 @@ type Scheduler struct {
 	store     *state.Store
 	log       *slog.Logger
 	active     map[string]bool
-	now        func() time.Time // defaults to time.Now; override in tests
-	loc        *time.Location   // timezone for schedule evaluation
-	flowActive bool             // tracks whether flow override is currently engaged
+	jitter     map[string]time.Duration // per-schedule random offset, recomputed daily
+	jitterDay  int                      // day-of-year when jitter was last computed
+	now        func() time.Time         // defaults to time.Now; override in tests
+	loc        *time.Location           // timezone for schedule evaluation
+	flowActive bool                     // tracks whether flow override is currently engaged
 }
 
 func New(schedules []config.Schedule, eng *engine.Engine, store *state.Store, log *slog.Logger) *Scheduler {
@@ -43,6 +46,7 @@ func New(schedules []config.Schedule, eng *engine.Engine, store *state.Store, lo
 		store:     store,
 		log:       log,
 		active:    make(map[string]bool),
+		jitter:    make(map[string]time.Duration),
 		now:       time.Now,
 	}
 }
@@ -111,6 +115,20 @@ func (s *Scheduler) evaluate(ctx context.Context) {
 	now := s.now()
 	if s.loc != nil {
 		now = now.In(s.loc)
+	}
+
+	// Recompute jitter offsets once per day
+	if yday := now.YearDay(); yday != s.jitterDay {
+		s.jitterDay = yday
+		for _, sched := range s.schedules {
+			if sched.Jitter > 0 {
+				// Random offset in [-jitter, +jitter]
+				maxNs := sched.Jitter.Nanoseconds()
+				s.jitter[sched.Name] = time.Duration(rand.Int64N(2*maxNs+1) - maxNs)
+				s.log.Debug("jitter computed", "schedule", sched.Name,
+					"offset", s.jitter[sched.Name])
+			}
+		}
 	}
 
 	for _, sched := range s.schedules {
@@ -225,6 +243,11 @@ func (s *Scheduler) inWindow(sched config.Schedule, now time.Time) bool {
 	if err != nil {
 		s.log.Error("bad schedule stop time", "schedule", sched.Name, "error", err)
 		return false
+	}
+
+	// Apply jitter offset to start time
+	if j, ok := s.jitter[sched.Name]; ok {
+		start = start.Add(j)
 	}
 
 	return !now.Before(start) && now.Before(stop)
