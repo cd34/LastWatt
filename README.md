@@ -56,7 +56,7 @@ LastWatt manages three independent reasons to curtail the water heater. The wate
 
 When the monitored device stops responding (configurable fail threshold), the `grid.curtail` recipe runs -- sets the thermostat to emergency temps, turns off the water heater, lights the curtail LED. When grid power returns, the `grid.restore` recipe reverses everything. If a rate schedule or vacation hold is still active, the water heater stays off after restore.
 
-When `flow_override` is enabled, flow detection temporarily restores the water heater during an outage (someone is showering). It re-curtails when flow stops. Flow override is disabled during vacation.
+When `flow_override` is enabled, flow detection temporarily restores the water heater during an outage (someone is showering). It re-curtails when flow stops.
 
 ### Time-of-Use Rates
 
@@ -81,15 +81,18 @@ rates:
       params: { pin: "17", state: on, label: water_heater }
 ```
 
-When `flow_override` is enabled and water flow is detected during a rate window, the water heater is temporarily restored (someone is showering). It re-curtails when flow stops. Flow override is **disabled during vacation** -- nobody is home.
+When `flow_override` is enabled and water flow is detected during a rate window, the water heater is temporarily restored (someone is showering). It re-curtails when flow stops.
 
 ### Vacation
 
-Polls the Ecobee API for active vacation events. When vacation mode is detected, the water heater turns off. Flow override is disabled -- no reason to heat water in an empty house. When vacation ends, the water heater only restores if the grid is up and no rate schedule is active.
+Polls the Ecobee API for active vacation events. When vacation mode is detected, the water heater turns off. When vacation ends, the water heater only restores if the grid is up and no rate schedule is active.
+
+`flow_override` defaults to false -- no reason to heat water in an empty house. Set to true if someone is still present (pet sitter, house guest).
 
 ```yaml
 vacation:
   poll_interval: 10m
+  flow_override: false
   curtail:
     - action: gpio.set
       params: { pin: "17", state: off, label: water_heater }
@@ -100,21 +103,24 @@ vacation:
 
 ### Interaction Matrix
 
+Each section has a `flow_override` option that controls whether water flow detection temporarily restores the water heater during curtailment. When flow stops, curtailment reapplies.
+
 | Event | Grid | Vacation | Rate Schedule | Water Heater | Flow Override |
 |---|---|---|---|---|---|
 | Normal operation | up | off | none | ON | n/a |
-| Grid goes down | **down** | off | none | OFF | allowed |
+| Grid goes down | **down** | off | none | OFF | per `grid.flow_override` |
 | Flow detected, grid down | down | off | none | **ON** (temp) | active |
 | Flow stops, grid down | down | off | none | OFF | deactivated |
-| Rate window starts | up | off | **active** | OFF | allowed |
+| Rate window starts | up | off | **active** | OFF | per `rates.flow_override` |
 | Flow detected, rate active | up | off | active | **ON** (temp) | active |
-| Vacation starts | up | **on** | none | OFF | **blocked** |
-| Flow detected, vacation | up/down | on | any | OFF | blocked |
-| Grid restores, vacation active | up | on | none | OFF | blocked |
-| Grid restores, rate active | up | off | active | OFF | allowed |
-| Vacation ends, rate active | up | off | active | OFF | allowed |
-| Rate ends, vacation active | up | on | none | OFF | blocked |
-| Mid-peak ends, peak active | up | off | active | OFF | allowed |
+| Vacation starts | up | **on** | none | OFF | per `vacation.flow_override` |
+| Flow detected, vacation (override off) | any | on | any | OFF | blocked |
+| Flow detected, vacation (override on) | any | on | any | **ON** (temp) | active |
+| Grid restores, vacation active | up | on | none | OFF | -- |
+| Grid restores, rate active | up | off | active | OFF | per `rates.flow_override` |
+| Vacation ends, rate active | up | off | active | OFF | per `rates.flow_override` |
+| Rate ends, vacation active | up | on | none | OFF | per `vacation.flow_override` |
+| Mid-peak ends, peak active | up | off | active | OFF | per `rates.flow_override` |
 | All holds clear | up | off | none | ON | n/a |
 
 ## CLI
@@ -135,22 +141,24 @@ See [config.yaml.sample](config.yaml.sample) for a full example with comments. T
 
 ```yaml
 grid:
-  curtail: [...]     # runs on grid power loss
-  restore: [...]     # runs when grid returns
+  flow_override: true   # allow water heater on flow (default false)
+  curtail: [...]         # runs on grid power loss
+  restore: [...]         # runs when grid returns
 
 rates:
   timezone: America/Denver
   weekends_offpeak: true
   peak: { start: "17:00", end: "21:00" }
   mid_peak: { start: "13:00", end: "17:00" }
-  flow_override: true
-  curtail: [...]     # runs when entering a rate window
-  restore: [...]     # runs when leaving a rate window
+  flow_override: true   # allow water heater on flow (default false)
+  curtail: [...]         # runs when entering a rate window
+  restore: [...]         # runs when leaving a rate window
 
 vacation:
   poll_interval: 10m
-  curtail: [...]     # runs when Ecobee vacation detected
-  restore: [...]     # runs when vacation ends
+  flow_override: false   # allow water heater on flow (default false)
+  curtail: [...]         # runs when Ecobee vacation detected
+  restore: [...]         # runs when vacation ends
 ```
 
 ## Available Actions
