@@ -7,17 +7,18 @@ A grid curtailment daemon for Raspberry Pi. Monitors grid power by pinging a dev
 - **Ping-based grid monitoring** with configurable fail/recover thresholds
 - **Three curtailment modes** -- off-grid, time-of-use rate schedules, and vacation
 - **Time-of-use rates** -- mid-peak and peak windows with timezone/DST support, weekends off-peak option
-- **Flow override** -- temporarily restores water heater when flow is detected during rate or off-grid curtailment (disabled during vacation)
+- **Flow override** -- temporarily restores the water heater when flow is detected during curtailment (configurable per action step)
 - **Vacation mode** -- polls Ecobee for vacation events and curtails the water heater while away
 - **Coordinated holds** -- water heater only restores when all holds (grid, schedule, vacation) are cleared
 - **Modular action system** -- add new device types without changing the core
-- **YAML recipes** for curtail and restore sequences
+- **YAML recipes** with consistent `start`/`stop` action lists across all modes
 - **Ecobee thermostat** control via web auth (no developer API key needed)
 - **GPIO** relay and LED control via periph.io
 - **Shelly** relay control via local HTTP API
 - **Tempest weather station** integration (local UDP broadcast)
 - **Flow meter** -- TUF-2000M ultrasonic flow meter via Modbus RTU
 - **NWS hourly forecast** for weather-aware decision making
+- **Schedule jitter** -- randomize start times to avoid simultaneous switching
 - **Startup grace period** -- won't false-curtail if Pi boots before the monitored device
 - **Debounced state writes** to reduce SD card wear
 
@@ -50,13 +51,13 @@ sudo systemctl enable --now lastwatt
 
 ## Curtailment Modes
 
-LastWatt manages three independent reasons to curtail the water heater. The water heater only turns back on when **all** holds are cleared.
+LastWatt manages three independent reasons to curtail the water heater. The water heater only turns back on when **all** holds are cleared. Each mode uses consistent `start`/`stop` action lists.
 
 ### Off-Grid
 
-When the monitored device stops responding (configurable fail threshold), the `grid.curtail` recipe runs -- sets the thermostat to emergency temps, turns off the water heater, lights the curtail LED. When grid power returns, the `grid.restore` recipe reverses everything. If a rate schedule or vacation hold is still active, the water heater stays off after restore.
+When the monitored device stops responding (configurable fail threshold), `grid.start` runs -- sets the thermostat to emergency temps, turns off the water heater, lights the curtail LED. When grid power returns, `grid.stop` reverses everything. If a rate schedule or vacation hold is still active, the water heater stays off.
 
-Actions marked with `flow_override: true` are temporarily restored when water flow is detected (someone is showering). They re-curtail when flow stops.
+Actions marked with `flow_override: true` are temporarily reversed when water flow is detected (someone is showering). They re-engage when flow stops.
 
 ### Time-of-Use Rates
 
@@ -72,16 +73,17 @@ rates:
   mid_peak:
     start: "13:00"
     end: "17:00"
-  flow_override: true
-  curtail:
+  start:
     - action: gpio.set
       params: { pin: "17", state: off, label: water_heater }
-  restore:
+      flow_override: true
+  stop:
     - action: gpio.set
       params: { pin: "17", state: on, label: water_heater }
+      flow_override: true
 ```
 
-Actions with `flow_override: true` are temporarily restored when water flow is detected during a rate window. They re-curtail when flow stops.
+Actions with `flow_override: true` are temporarily reversed when water flow is detected during a rate window. They re-engage when flow stops.
 
 ### Vacation
 
@@ -92,10 +94,10 @@ Omit `flow_override` on vacation actions -- no reason to heat water in an empty 
 ```yaml
 vacation:
   poll_interval: 10m
-  curtail:
+  start:
     - action: gpio.set
       params: { pin: "17", state: off, label: water_heater }
-  restore:
+  stop:
     - action: gpio.set
       params: { pin: "17", state: on, label: water_heater }
 ```
@@ -110,7 +112,7 @@ vacation:
 | Grid goes down | **down** | off | none | OFF | per step flag |
 | Flow detected, grid down | down | off | none | **ON** (temp) | active (if flagged) |
 | Flow stops, grid down | down | off | none | OFF | deactivated |
-| Rate window starts | up | off | **active** | OFF | per step flag |
+| Rate window enters | up | off | **active** | OFF | per step flag |
 | Flow detected, rate active | up | off | active | **ON** (temp) | active (if flagged) |
 | Vacation starts | up | **on** | none | OFF | per step flag |
 | Grid restores, vacation active | up | on | none | OFF | -- |
@@ -125,8 +127,8 @@ vacation:
 ```
 lastwatt daemon              # run the monitor loop
 lastwatt status              # show current state (normal/curtailed)
-lastwatt run curtail         # manually trigger curtail recipe
-lastwatt run restore         # manually trigger restore recipe
+lastwatt run start           # manually trigger grid start recipe
+lastwatt run stop            # manually trigger grid stop recipe
 lastwatt action <name> [-p key=value ...]  # run a single action
 lastwatt ecobee-auth         # authenticate with Ecobee
 lastwatt forecast            # show NWS hourly forecast
@@ -134,36 +136,36 @@ lastwatt forecast            # show NWS hourly forecast
 
 ## Config
 
-See [config.yaml.sample](config.yaml.sample) for a full example with comments. The three curtailment modes each have their own section with `curtail` and `restore` action lists:
+See [config.yaml.sample](config.yaml.sample) for a full example with comments. All three curtailment modes use `start`/`stop` action lists:
 
 ```yaml
 grid:
-  curtail:
+  start:
     - action: gpio.set
       params: { pin: "17", state: off, label: water_heater }
       flow_override: true    # this device responds to flow detection
     - action: gpio.set
       params: { pin: "27", state: on, label: curtail_led }
-  restore: [...]
+  stop: [...]
 
 rates:
   timezone: America/Denver
   weekends_offpeak: true
   peak: { start: "17:00", end: "21:00" }
   mid_peak: { start: "13:00", end: "17:00" }
-  curtail:
+  start:
     - action: gpio.set
       params: { pin: "17", state: off, label: water_heater }
       flow_override: true
-  restore: [...]
+  stop: [...]
 
 vacation:
   poll_interval: 10m
-  curtail:
+  start:
     - action: gpio.set
       params: { pin: "17", state: off, label: water_heater }
       # no flow_override — nobody home
-  restore: [...]
+  stop: [...]
 ```
 
 The `flow_meter` section defines the connection to the flow sensor:
@@ -174,6 +176,23 @@ flow_meter:
   baud: 9600
   slave_id: 1
   interval: 5s
+```
+
+Custom schedules use `begin`/`end` for the time window and `start`/`stop` for actions:
+
+```yaml
+schedules:
+  - name: evening_lights
+    days: [Mon, Tue, Wed, Thu, Fri]
+    begin: "22:00"
+    end: "06:00"
+    jitter: 10m
+    start:
+      - action: shelly.set
+        params: { host: 192.168.1.X, state: off, label: porch_light }
+    stop:
+      - action: shelly.set
+        params: { host: 192.168.1.X, state: on, label: porch_light }
 ```
 
 ## Available Actions

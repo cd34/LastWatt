@@ -29,19 +29,19 @@ func ShouldRestore(gridStatus state.Status, vacationActive bool, scheduleActive 
 // specific actions are temporarily restored. When flow stops, they
 // re-curtail. Only operates while the given status check returns true.
 type FlowOverride struct {
-	Store      *state.Store
-	Eng        RecipeRunner
-	Curtail    []config.ActionStep // flow_override steps to re-curtail
-	Restore    []config.ActionStep // flow_override steps to restore
-	Log        *slog.Logger
-	Label      string // e.g. "grid", "sched:peak" — for log/recipe names
-	StatusCheck func() bool // returns true when this override should be evaluated
-	Active     bool
+	Store       *state.Store
+	Eng         RecipeRunner
+	Start       []config.ActionStep // flow_override steps to run on flow start
+	Stop        []config.ActionStep // flow_override steps to run on flow stop
+	Log         *slog.Logger
+	Label       string              // e.g. "grid", "sched:peak" — for log/recipe names
+	StatusCheck func() bool         // returns true when this override should be evaluated
+	Active      bool
 }
 
 // Evaluate checks current flow state and toggles the override.
 func (f *FlowOverride) Evaluate(ctx context.Context) {
-	if len(f.Curtail) == 0 && len(f.Restore) == 0 {
+	if len(f.Start) == 0 && len(f.Stop) == 0 {
 		return
 	}
 
@@ -57,13 +57,13 @@ func (f *FlowOverride) Evaluate(ctx context.Context) {
 	if flowing == "true" && !f.Active {
 		f.Active = true
 		f.Log.Info("flow detected — temporarily restoring flow_override actions", "source", f.Label)
-		if err := f.Eng.RunRecipe(ctx, "flow-override:"+f.Label, f.Restore); err != nil {
+		if err := f.Eng.RunRecipe(ctx, "flow-override:"+f.Label, f.Stop); err != nil {
 			f.Log.Error("flow override restore failed", "source", f.Label, "error", err)
 		}
 	} else if flowing != "true" && f.Active {
 		f.Active = false
 		f.Log.Info("flow stopped — re-curtailing flow_override actions", "source", f.Label)
-		if err := f.Eng.RunRecipe(ctx, "flow-recurtail:"+f.Label, f.Curtail); err != nil {
+		if err := f.Eng.RunRecipe(ctx, "flow-recurtail:"+f.Label, f.Start); err != nil {
 			f.Log.Error("flow re-curtail failed", "source", f.Label, "error", err)
 		}
 	}
@@ -94,7 +94,7 @@ func (v *VacationMonitor) HandleTransition(ctx context.Context) string {
 
 	if nowVacation == "true" && v.lastVacation != "true" {
 		v.Log.Info("vacation mode activated — running vacation curtail")
-		if err := v.Eng.RunRecipe(ctx, "vacation-curtail", v.Cfg.Curtail); err != nil {
+		if err := v.Eng.RunRecipe(ctx, "vacation-curtail", v.Cfg.Start); err != nil {
 			v.Log.Error("vacation curtail failed", "error", err)
 		}
 		return "curtailed"
@@ -111,7 +111,7 @@ func (v *VacationMonitor) HandleTransition(ctx context.Context) string {
 			return "skipped"
 		}
 		v.Log.Info("vacation mode ended — running vacation restore")
-		if err := v.Eng.RunRecipe(ctx, "vacation-restore", v.Cfg.Restore); err != nil {
+		if err := v.Eng.RunRecipe(ctx, "vacation-restore", v.Cfg.Stop); err != nil {
 			v.Log.Error("vacation restore failed", "error", err)
 		}
 		return "restored"
