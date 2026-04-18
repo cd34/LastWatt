@@ -11,12 +11,21 @@ location:
 
 state_file: /var/lib/lastwatt/state.json
 
+# --- Flow meter ---
+# TUF-2000M ultrasonic flow meter via Modbus RTU.
+# Required for flow_override on action steps below.
+# flow_meter:
+#   port: /dev/ttyUSB0
+#   baud: 9600
+#   slave_id: 1
+#   interval: 5s
+
 # --- Grid power loss ---
 # Actions to run when the monitored device stops responding.
-# flow_override: if water flow is detected during an outage the water
-# heater temporarily restores (disabled during vacation).
+# Mark individual actions with flow_override: true to allow them to be
+# temporarily restored when water flow is detected (e.g., someone is
+# showering during an outage).
 grid:
-  flow_override: true
   curtail:
     - action: ecobee.read_mode      # save current thermostat state
     - action: ecobee.set_hold
@@ -28,6 +37,7 @@ grid:
         pin: "17"
         state: off
         label: water_heater
+      flow_override: true            # restore this device when flow detected
     - action: gpio.set
       params:
         pin: "27"
@@ -45,6 +55,7 @@ grid:
         pin: "17"
         state: on
         label: water_heater
+      flow_override: true            # pairs with the curtail step above
     - action: gpio.set
       params:
         pin: "27"
@@ -58,8 +69,7 @@ grid:
 
 # --- Time-of-use electricity rate windows ---
 # Generates mid-peak and peak schedules automatically.
-# Flow override is enabled — water heater temporarily restores when flow
-# is detected (disabled during vacation).
+# Mark actions with flow_override: true to allow temporary restore on flow.
 rates:
   timezone: America/Denver     # MST/MDT — automatic DST handling
   weekends_offpeak: true       # skip rate curtailment on Sat/Sun
@@ -69,31 +79,31 @@ rates:
   mid_peak:
     start: "13:00"             # 1:00 PM
     end: "17:00"               # 5:00 PM
-  flow_override: true          # allow water heater when flow detected
   curtail:
     - action: gpio.set
       params:
         pin: "17"
         state: off
         label: water_heater
+      flow_override: true
   restore:
     - action: gpio.set
       params:
         pin: "17"
         state: on
         label: water_heater
+      flow_override: true
 
 # --- Vacation mode ---
 # Polls the Ecobee thermostat for vacation events.  When vacation mode is
 # detected the water heater turns off.
-# flow_override defaults to false — nobody is home so there is no reason
-# to heat water.  Set to true if you want flow detection to still work
-# during vacation (e.g., pet sitter, house guest).
+# Omit flow_override on steps — nobody is home so there is no reason
+# to heat water.  Add flow_override: true if someone is still present
+# (e.g., pet sitter, house guest).
 # When vacation ends, restore runs only if the grid is up AND no rate
 # schedule is active.
 vacation:
   poll_interval: 10m
-  flow_override: false
   curtail:
     - action: gpio.set
       params:

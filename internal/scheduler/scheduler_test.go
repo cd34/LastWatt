@@ -76,6 +76,18 @@ func scheduleAt(name string, ref time.Time) config.Schedule {
 	}
 }
 
+// scheduleAtWithFlow creates a schedule active at ref with flow_override on actions.
+func scheduleAtWithFlow(name string, ref time.Time) config.Schedule {
+	s := scheduleAt(name, ref)
+	for i := range s.Actions {
+		s.Actions[i].FlowOverride = true
+	}
+	for i := range s.Restore {
+		s.Restore[i].FlowOverride = true
+	}
+	return s
+}
+
 // scheduleExpiredAt creates a schedule that ended before ref.
 func scheduleExpiredAt(name string, ref time.Time) config.Schedule {
 	day := ref.Weekday().String()[:3]
@@ -279,17 +291,14 @@ func TestSchedule_ReapplyAfterGridRestore(t *testing.T) {
 
 func TestSchedule_FlowOverride_RestoresDuringSchedule(t *testing.T) {
 	now := testNow()
-	sched, store, _, restoreAct := newTestSched(t, now, []config.Schedule{scheduleAt("peak", now)})
-	sched.SetFlowOverride(true)
+	sched, store, _, restoreAct := newTestSched(t, now, []config.Schedule{scheduleAtWithFlow("peak", now)})
 	ctx := context.Background()
 
-	// Enter schedule
 	sched.evaluate(ctx)
 	if sched.ActiveSchedule() != "peak" {
 		t.Fatal("schedule should be active")
 	}
 
-	// Flow detected — should restore water heater temporarily
 	restoreAct.reset()
 	store.Set("flow.flowing", "true")
 	sched.evaluate(ctx)
@@ -304,16 +313,13 @@ func TestSchedule_FlowOverride_RestoresDuringSchedule(t *testing.T) {
 
 func TestSchedule_FlowOverride_RecurtailsWhenFlowStops(t *testing.T) {
 	now := testNow()
-	sched, store, curtailAct, _ := newTestSched(t, now, []config.Schedule{scheduleAt("peak", now)})
-	sched.SetFlowOverride(true)
+	sched, store, curtailAct, _ := newTestSched(t, now, []config.Schedule{scheduleAtWithFlow("peak", now)})
 	ctx := context.Background()
 
-	// Enter schedule, start flow
 	sched.evaluate(ctx)
 	store.Set("flow.flowing", "true")
-	sched.evaluate(ctx) // triggers flow override
+	sched.evaluate(ctx)
 
-	// Flow stops — should re-curtail
 	curtailAct.reset()
 	store.Set("flow.flowing", "false")
 	sched.evaluate(ctx)
@@ -326,55 +332,10 @@ func TestSchedule_FlowOverride_RecurtailsWhenFlowStops(t *testing.T) {
 	}
 }
 
-func TestSchedule_FlowOverride_BlockedDuringVacation(t *testing.T) {
+func TestSchedule_FlowOverride_NotSetOnActions(t *testing.T) {
 	now := testNow()
+	// scheduleAt does NOT set flow_override on steps
 	sched, store, _, restoreAct := newTestSched(t, now, []config.Schedule{scheduleAt("peak", now)})
-	sched.SetFlowOverride(true)
-	ctx := context.Background()
-
-	// Enter schedule, vacation active
-	sched.evaluate(ctx)
-	store.Set("ecobee.vacation_active", "true")
-
-	// Flow detected — should NOT override because vacation
-	restoreAct.reset()
-	store.Set("flow.flowing", "true")
-	sched.evaluate(ctx)
-
-	if sched.FlowOverrideActive() {
-		t.Fatal("flow override should NOT activate during vacation")
-	}
-	if restoreAct.callCount() != 0 {
-		t.Fatal("restore should NOT run during vacation even with flow")
-	}
-}
-
-func TestSchedule_FlowOverride_AllowedDuringVacation_WhenEnabled(t *testing.T) {
-	now := testNow()
-	sched, store, _, restoreAct := newTestSched(t, now, []config.Schedule{scheduleAt("peak", now)})
-	sched.SetFlowOverride(true)
-	sched.SetVacationFlowOverride(true)
-	ctx := context.Background()
-
-	sched.evaluate(ctx)
-	store.Set("ecobee.vacation_active", "true")
-
-	restoreAct.reset()
-	store.Set("flow.flowing", "true")
-	sched.evaluate(ctx)
-
-	if !sched.FlowOverrideActive() {
-		t.Fatal("flow override should activate during vacation when enabled")
-	}
-	if restoreAct.callCount() == 0 {
-		t.Fatal("expected restore to run")
-	}
-}
-
-func TestSchedule_FlowOverride_DisabledByDefault(t *testing.T) {
-	now := testNow()
-	sched, store, _, restoreAct := newTestSched(t, now, []config.Schedule{scheduleAt("peak", now)})
-	// flowOverride NOT set (default false)
 	ctx := context.Background()
 
 	sched.evaluate(ctx)
@@ -383,20 +344,18 @@ func TestSchedule_FlowOverride_DisabledByDefault(t *testing.T) {
 	sched.evaluate(ctx)
 
 	if sched.FlowOverrideActive() {
-		t.Fatal("flow override should not activate when disabled")
+		t.Fatal("flow override should not activate when no steps have flow_override")
 	}
 	if restoreAct.callCount() != 0 {
-		t.Fatal("restore should NOT run when flow override is disabled")
+		t.Fatal("restore should NOT run when no steps have flow_override")
 	}
 }
 
 func TestSchedule_FlowOverride_CleansUpWhenScheduleEnds(t *testing.T) {
 	now := testNow()
-	sched, store, _, _ := newTestSched(t, now, []config.Schedule{scheduleAt("peak", now)})
-	sched.SetFlowOverride(true)
+	sched, store, _, _ := newTestSched(t, now, []config.Schedule{scheduleAtWithFlow("peak", now)})
 	ctx := context.Background()
 
-	// Enter, start flow override
 	sched.evaluate(ctx)
 	store.Set("flow.flowing", "true")
 	sched.evaluate(ctx)
@@ -404,7 +363,6 @@ func TestSchedule_FlowOverride_CleansUpWhenScheduleEnds(t *testing.T) {
 		t.Fatal("flow override should be active")
 	}
 
-	// Schedule ends
 	sched.schedules = []config.Schedule{scheduleExpiredAt("peak", now)}
 	sched.evaluate(ctx)
 

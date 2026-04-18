@@ -329,34 +329,6 @@ func TestScenario_VacationEndAfterAllClear(t *testing.T) {
 	}
 }
 
-// --- Flow override tests ---
-
-func TestShouldFlowOverride(t *testing.T) {
-	tests := []struct {
-		name         string
-		vacation     bool
-		vacOverride  bool
-		flowing      bool
-		want         bool
-	}{
-		{"flowing, no vacation", false, false, true, true},
-		{"flowing, vacation, override disabled", true, false, true, false},
-		{"flowing, vacation, override enabled", true, true, true, true},
-		{"not flowing, no vacation", false, false, false, false},
-		{"not flowing, vacation", true, false, false, false},
-		{"not flowing, vacation, override enabled", true, true, false, false},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			got := ShouldFlowOverride(tt.vacation, tt.vacOverride, tt.flowing)
-			if got != tt.want {
-				t.Errorf("ShouldFlowOverride(vac=%v, vacOverride=%v, flowing=%v) = %v, want %v",
-					tt.vacation, tt.vacOverride, tt.flowing, got, tt.want)
-			}
-		})
-	}
-}
-
 func TestVacation_NilScheduleChecker(t *testing.T) {
 	store := newTestStore(t)
 	eng := &recipeLog{}
@@ -374,130 +346,112 @@ func TestVacation_NilScheduleChecker(t *testing.T) {
 	}
 }
 
-// --- Grid flow override tests ---
+// --- FlowOverride tests ---
 
-func newGridFlowOverride(store *state.Store, eng *recipeLog) *FlowOverride {
+func newTestFlowOverride(store *state.Store, eng *recipeLog) *FlowOverride {
 	return &FlowOverride{
 		Store:   store,
 		Eng:     eng,
-		Curtail: []config.ActionStep{{Action: "test.curtail"}},
-		Restore: []config.ActionStep{{Action: "test.restore"}},
+		Curtail: []config.ActionStep{{Action: "test.curtail", FlowOverride: true}},
+		Restore: []config.ActionStep{{Action: "test.restore", FlowOverride: true}},
 		Log:     testLog,
+		Label:   "grid",
+		StatusCheck: func() bool {
+			return store.GetStatus() == state.StatusCurtailed
+		},
 	}
 }
 
-func TestGridFlow_RestoresWhenFlowDetected(t *testing.T) {
+func TestFlowOverride_RestoresWhenFlowDetected(t *testing.T) {
 	store := newTestStore(t)
 	eng := &recipeLog{}
-	gf := newGridFlowOverride(store, eng)
+	fo := newTestFlowOverride(store, eng)
 
 	store.SetStatus(state.StatusCurtailed)
 	store.Set("flow.flowing", "true")
+	fo.Evaluate(context.Background())
 
-	gf.Evaluate(context.Background())
-
-	if !gf.Active {
+	if !fo.Active {
 		t.Fatal("flow override should be active")
 	}
-	if !eng.has("grid-flow-override") {
-		t.Fatal("expected grid-flow-override recipe to run")
+	if !eng.has("flow-override:grid") {
+		t.Fatal("expected flow-override:grid recipe to run")
 	}
 }
 
-func TestGridFlow_RecurtailsWhenFlowStops(t *testing.T) {
+func TestFlowOverride_RecurtailsWhenFlowStops(t *testing.T) {
 	store := newTestStore(t)
 	eng := &recipeLog{}
-	gf := newGridFlowOverride(store, eng)
+	fo := newTestFlowOverride(store, eng)
 
 	store.SetStatus(state.StatusCurtailed)
 	store.Set("flow.flowing", "true")
-	gf.Evaluate(context.Background())
+	fo.Evaluate(context.Background())
 
 	eng.reset()
 	store.Set("flow.flowing", "false")
-	gf.Evaluate(context.Background())
+	fo.Evaluate(context.Background())
 
-	if gf.Active {
+	if fo.Active {
 		t.Fatal("flow override should be inactive")
 	}
-	if !eng.has("grid-flow-recurtail") {
-		t.Fatal("expected grid-flow-recurtail recipe to run")
+	if !eng.has("flow-recurtail:grid") {
+		t.Fatal("expected flow-recurtail:grid recipe to run")
 	}
 }
 
-func TestGridFlow_BlockedDuringVacation(t *testing.T) {
+func TestFlowOverride_InactiveWhenStatusCheckFails(t *testing.T) {
 	store := newTestStore(t)
 	eng := &recipeLog{}
-	gf := newGridFlowOverride(store, eng)
+	fo := newTestFlowOverride(store, eng)
+
+	store.SetStatus(state.StatusNormal) // status check returns false
+	store.Set("flow.flowing", "true")
+	fo.Evaluate(context.Background())
+
+	if fo.Active {
+		t.Fatal("flow override should NOT activate when status check fails")
+	}
+}
+
+func TestFlowOverride_ClearsWhenStatusCheckFails(t *testing.T) {
+	store := newTestStore(t)
+	eng := &recipeLog{}
+	fo := newTestFlowOverride(store, eng)
 
 	store.SetStatus(state.StatusCurtailed)
-	store.Set("ecobee.vacation_active", "true")
 	store.Set("flow.flowing", "true")
-
-	gf.Evaluate(context.Background())
-
-	if gf.Active {
-		t.Fatal("flow override should NOT activate during vacation")
-	}
-	if len(eng.calls) != 0 {
-		t.Fatal("no recipes should run during vacation")
-	}
-}
-
-func TestGridFlow_AllowedDuringVacation_WhenEnabled(t *testing.T) {
-	store := newTestStore(t)
-	eng := &recipeLog{}
-	gf := newGridFlowOverride(store, eng)
-	gf.VacationFlowOverride = true
-
-	store.SetStatus(state.StatusCurtailed)
-	store.Set("ecobee.vacation_active", "true")
-	store.Set("flow.flowing", "true")
-
-	gf.Evaluate(context.Background())
-
-	if !gf.Active {
-		t.Fatal("flow override should activate during vacation when enabled")
-	}
-	if !eng.has("grid-flow-override") {
-		t.Fatal("expected grid-flow-override recipe to run")
-	}
-}
-
-func TestGridFlow_InactiveWhenGridNormal(t *testing.T) {
-	store := newTestStore(t)
-	eng := &recipeLog{}
-	gf := newGridFlowOverride(store, eng)
-
-	store.SetStatus(state.StatusNormal)
-	store.Set("flow.flowing", "true")
-
-	gf.Evaluate(context.Background())
-
-	if gf.Active {
-		t.Fatal("flow override should NOT activate when grid is normal")
-	}
-}
-
-func TestGridFlow_ClearsWhenGridRestores(t *testing.T) {
-	store := newTestStore(t)
-	eng := &recipeLog{}
-	gf := newGridFlowOverride(store, eng)
-
-	// Activate flow override
-	store.SetStatus(state.StatusCurtailed)
-	store.Set("flow.flowing", "true")
-	gf.Evaluate(context.Background())
-	if !gf.Active {
+	fo.Evaluate(context.Background())
+	if !fo.Active {
 		t.Fatal("should be active")
 	}
 
-	// Grid restores — override should clear
 	eng.reset()
 	store.SetStatus(state.StatusNormal)
-	gf.Evaluate(context.Background())
+	fo.Evaluate(context.Background())
 
-	if gf.Active {
-		t.Fatal("flow override should clear when grid restores")
+	if fo.Active {
+		t.Fatal("flow override should clear when status check fails")
+	}
+}
+
+func TestFlowOverride_NoSteps_Noop(t *testing.T) {
+	store := newTestStore(t)
+	eng := &recipeLog{}
+	fo := &FlowOverride{
+		Store: store,
+		Eng:   eng,
+		Log:   testLog,
+		Label: "empty",
+	}
+
+	store.Set("flow.flowing", "true")
+	fo.Evaluate(context.Background())
+
+	if fo.Active {
+		t.Fatal("should not activate with no steps")
+	}
+	if len(eng.calls) != 0 {
+		t.Fatal("should not run any recipes with no steps")
 	}
 }
