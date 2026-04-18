@@ -31,6 +31,52 @@ func ShouldFlowOverride(vacationActive bool, flowing bool) bool {
 	return flowing && !vacationActive
 }
 
+// FlowOverride tracks flow-based water heater override state for grid
+// curtailment. When the grid is down and flow is detected, the water heater
+// temporarily restores. When flow stops, it re-curtails. Disabled during
+// vacation.
+type FlowOverride struct {
+	Store   *state.Store
+	Eng     RecipeRunner
+	Curtail []config.ActionStep // actions to turn water heater off
+	Restore []config.ActionStep // actions to turn water heater on
+	Log     *slog.Logger
+	Active  bool
+}
+
+// Evaluate checks current flow state and toggles the override. Should be
+// called periodically (e.g., every 30s from the daemon loop or scheduler).
+func (f *FlowOverride) Evaluate(ctx context.Context) {
+	// Only relevant when grid is curtailed
+	if f.Store.GetStatus() != state.StatusCurtailed {
+		if f.Active {
+			f.Active = false
+		}
+		return
+	}
+
+	// No flow override during vacation
+	if v, _ := f.Store.Get("ecobee.vacation_active"); v == "true" {
+		return
+	}
+
+	flowing, _ := f.Store.Get("flow.flowing")
+
+	if flowing == "true" && !f.Active {
+		f.Active = true
+		f.Log.Info("flow detected during grid outage — temporarily restoring water heater")
+		if err := f.Eng.RunRecipe(ctx, "grid-flow-override", f.Restore); err != nil {
+			f.Log.Error("grid flow override restore failed", "error", err)
+		}
+	} else if flowing != "true" && f.Active {
+		f.Active = false
+		f.Log.Info("flow stopped during grid outage — re-curtailing water heater")
+		if err := f.Eng.RunRecipe(ctx, "grid-flow-recurtail", f.Curtail); err != nil {
+			f.Log.Error("grid flow re-curtail failed", "error", err)
+		}
+	}
+}
+
 // VacationMonitor checks for vacation mode transitions and curtails/restores
 // the water heater accordingly.
 type VacationMonitor struct {

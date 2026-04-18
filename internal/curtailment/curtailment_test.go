@@ -370,3 +370,111 @@ func TestVacation_NilScheduleChecker(t *testing.T) {
 		t.Fatalf("expected 'restored' with nil scheduler, got %q", result)
 	}
 }
+
+// --- Grid flow override tests ---
+
+func newGridFlowOverride(store *state.Store, eng *recipeLog) *FlowOverride {
+	return &FlowOverride{
+		Store:   store,
+		Eng:     eng,
+		Curtail: []config.ActionStep{{Action: "test.curtail"}},
+		Restore: []config.ActionStep{{Action: "test.restore"}},
+		Log:     testLog,
+	}
+}
+
+func TestGridFlow_RestoresWhenFlowDetected(t *testing.T) {
+	store := newTestStore(t)
+	eng := &recipeLog{}
+	gf := newGridFlowOverride(store, eng)
+
+	store.SetStatus(state.StatusCurtailed)
+	store.Set("flow.flowing", "true")
+
+	gf.Evaluate(context.Background())
+
+	if !gf.Active {
+		t.Fatal("flow override should be active")
+	}
+	if !eng.has("grid-flow-override") {
+		t.Fatal("expected grid-flow-override recipe to run")
+	}
+}
+
+func TestGridFlow_RecurtailsWhenFlowStops(t *testing.T) {
+	store := newTestStore(t)
+	eng := &recipeLog{}
+	gf := newGridFlowOverride(store, eng)
+
+	store.SetStatus(state.StatusCurtailed)
+	store.Set("flow.flowing", "true")
+	gf.Evaluate(context.Background())
+
+	eng.reset()
+	store.Set("flow.flowing", "false")
+	gf.Evaluate(context.Background())
+
+	if gf.Active {
+		t.Fatal("flow override should be inactive")
+	}
+	if !eng.has("grid-flow-recurtail") {
+		t.Fatal("expected grid-flow-recurtail recipe to run")
+	}
+}
+
+func TestGridFlow_BlockedDuringVacation(t *testing.T) {
+	store := newTestStore(t)
+	eng := &recipeLog{}
+	gf := newGridFlowOverride(store, eng)
+
+	store.SetStatus(state.StatusCurtailed)
+	store.Set("ecobee.vacation_active", "true")
+	store.Set("flow.flowing", "true")
+
+	gf.Evaluate(context.Background())
+
+	if gf.Active {
+		t.Fatal("flow override should NOT activate during vacation")
+	}
+	if len(eng.calls) != 0 {
+		t.Fatal("no recipes should run during vacation")
+	}
+}
+
+func TestGridFlow_InactiveWhenGridNormal(t *testing.T) {
+	store := newTestStore(t)
+	eng := &recipeLog{}
+	gf := newGridFlowOverride(store, eng)
+
+	store.SetStatus(state.StatusNormal)
+	store.Set("flow.flowing", "true")
+
+	gf.Evaluate(context.Background())
+
+	if gf.Active {
+		t.Fatal("flow override should NOT activate when grid is normal")
+	}
+}
+
+func TestGridFlow_ClearsWhenGridRestores(t *testing.T) {
+	store := newTestStore(t)
+	eng := &recipeLog{}
+	gf := newGridFlowOverride(store, eng)
+
+	// Activate flow override
+	store.SetStatus(state.StatusCurtailed)
+	store.Set("flow.flowing", "true")
+	gf.Evaluate(context.Background())
+	if !gf.Active {
+		t.Fatal("should be active")
+	}
+
+	// Grid restores — override should clear
+	eng.reset()
+	store.SetStatus(state.StatusNormal)
+	gf.Evaluate(context.Background())
+
+	if gf.Active {
+		t.Fatal("flow override should clear when grid restores")
+	}
+}

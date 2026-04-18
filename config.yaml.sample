@@ -11,12 +11,55 @@ location:
 
 state_file: /var/lib/lastwatt/state.json
 
+# --- Grid power loss ---
+# Actions to run when the monitored device stops responding.
+# flow_override: if water flow is detected during an outage the water
+# heater temporarily restores (disabled during vacation).
+grid:
+  flow_override: true
+  curtail:
+    - action: ecobee.read_mode      # save current thermostat state
+    - action: ecobee.set_hold
+      params:
+        heat_temp: 55
+        cool_temp: 85
+    - action: gpio.set
+      params:
+        pin: "17"
+        state: off
+        label: water_heater
+    - action: gpio.set
+      params:
+        pin: "27"
+        state: on
+        label: curtail_led
+    # - action: shelly.set
+    #   params:
+    #     host: 192.168.1.X
+    #     state: off
+    #     label: poe_switch
+  restore:
+    - action: ecobee.resume
+    - action: gpio.set
+      params:
+        pin: "17"
+        state: on
+        label: water_heater
+    - action: gpio.set
+      params:
+        pin: "27"
+        state: off
+        label: curtail_led
+    # - action: shelly.set
+    #   params:
+    #     host: 192.168.1.X
+    #     state: on
+    #     label: poe_switch
+
 # --- Time-of-use electricity rate windows ---
 # Generates mid-peak and peak schedules automatically.
-# During these windows the curtail actions run; when the window ends the
-# restore actions run.  If flow_override is true and water flow is detected
-# during a rate window, the water heater is temporarily restored until flow
-# stops (disabled during vacation — nobody is home).
+# Flow override is enabled — water heater temporarily restores when flow
+# is detected (disabled during vacation).
 rates:
   timezone: America/Denver     # MST/MDT — automatic DST handling
   weekends_offpeak: true       # skip rate curtailment on Sat/Sun
@@ -40,57 +83,10 @@ rates:
         state: on
         label: water_heater
 
-# --- Grid power loss ---
-# Actions to run when the monitored device stops responding (top to bottom).
-# Off-grid curtailment also honors the flow override from the rates section
-# — if someone is showering during an outage the water heater stays on.
-curtail:
-  - action: ecobee.read_mode        # save current thermostat state
-  - action: ecobee.set_hold
-    params:
-      heat_temp: 55
-      cool_temp: 85
-  - action: gpio.set
-    params:
-      pin: "17"
-      state: off
-      label: water_heater
-  - action: gpio.set
-    params:
-      pin: "27"
-      state: on
-      label: curtail_led
-  # - action: shelly.set
-  #   params:
-  #     host: 192.168.1.X
-  #     state: off
-  #     label: poe_switch
-
-# Actions to run when grid power returns (top to bottom).
-# If a rate schedule or vacation hold is still active the water heater
-# curtailment is reapplied after the restore recipe finishes.
-restore:
-  - action: ecobee.resume
-  - action: gpio.set
-    params:
-      pin: "17"
-      state: on
-      label: water_heater
-  - action: gpio.set
-    params:
-      pin: "27"
-      state: off
-      label: curtail_led
-  # - action: shelly.set
-  #   params:
-  #     host: 192.168.1.X
-  #     state: on
-  #     label: poe_switch
-
 # --- Vacation mode ---
 # Polls the Ecobee thermostat for vacation events.  When vacation mode is
-# detected the curtail actions run.  Vacation curtailment disables the flow
-# override — nobody is home so there is no reason to heat water.
+# detected the water heater turns off.  Flow override is DISABLED — nobody
+# is home so there is no reason to heat water.
 # When vacation ends, restore runs only if the grid is up AND no rate
 # schedule is active.
 vacation:
@@ -109,8 +105,7 @@ vacation:
         label: water_heater
 
 # --- Custom schedules (optional) ---
-# For anything the rates section doesn't cover.  Each schedule has its own
-# curtail (actions) and restore lists, plus a day/time window.
+# For anything the rates section doesn't cover.
 # schedules:
 #   - name: evening_lights
 #     days: [Mon, Tue, Wed, Thu, Fri]

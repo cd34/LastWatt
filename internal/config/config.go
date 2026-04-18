@@ -12,14 +12,20 @@ type Config struct {
 	Monitor   MonitorConfig  `yaml:"monitor"`
 	Location  LocationConfig `yaml:"location"`
 	StateFile string         `yaml:"state_file"`
-	Curtail   []ActionStep   `yaml:"curtail"`
-	Restore   []ActionStep   `yaml:"restore"`
+	Grid      GridConfig     `yaml:"grid"`
 	Rates     RatesConfig    `yaml:"rates,omitempty"`
-	Schedules []Schedule     `yaml:"schedules,omitempty"`
 	Vacation  VacationConfig `yaml:"vacation,omitempty"`
+	Schedules []Schedule     `yaml:"schedules,omitempty"`
 	Overrides []OverrideRule `yaml:"overrides,omitempty"`
 
 	ratesLocation *time.Location // parsed from Rates.Timezone
+}
+
+// GridConfig defines actions to run on grid power loss and restore.
+type GridConfig struct {
+	FlowOverride bool         `yaml:"flow_override"`
+	Curtail      []ActionStep `yaml:"curtail"`
+	Restore      []ActionStep `yaml:"restore"`
 }
 
 // RatesLocation returns the parsed timezone for rate schedules, or local time.

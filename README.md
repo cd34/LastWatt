@@ -54,7 +54,9 @@ LastWatt manages three independent reasons to curtail the water heater. The wate
 
 ### Off-Grid
 
-When the monitored device stops responding (configurable fail threshold), the `curtail` recipe runs -- sets the thermostat to emergency temps, turns off the water heater, lights the curtail LED. When grid power returns, the `restore` recipe reverses everything. If a rate schedule or vacation hold is still active, the water heater stays off after restore.
+When the monitored device stops responding (configurable fail threshold), the `grid.curtail` recipe runs -- sets the thermostat to emergency temps, turns off the water heater, lights the curtail LED. When grid power returns, the `grid.restore` recipe reverses everything. If a rate schedule or vacation hold is still active, the water heater stays off after restore.
+
+When `flow_override` is enabled, flow detection temporarily restores the water heater during an outage (someone is showering). It re-curtails when flow stops. Flow override is disabled during vacation.
 
 ### Time-of-Use Rates
 
@@ -102,8 +104,12 @@ vacation:
 |---|---|---|---|---|---|
 | Normal operation | up | off | none | ON | n/a |
 | Grid goes down | **down** | off | none | OFF | allowed |
+| Flow detected, grid down | down | off | none | **ON** (temp) | active |
+| Flow stops, grid down | down | off | none | OFF | deactivated |
 | Rate window starts | up | off | **active** | OFF | allowed |
-| Vacation starts | up | **on** | none | OFF | blocked |
+| Flow detected, rate active | up | off | active | **ON** (temp) | active |
+| Vacation starts | up | **on** | none | OFF | **blocked** |
+| Flow detected, vacation | up/down | on | any | OFF | blocked |
 | Grid restores, vacation active | up | on | none | OFF | blocked |
 | Grid restores, rate active | up | off | active | OFF | allowed |
 | Vacation ends, rate active | up | off | active | OFF | allowed |
@@ -125,7 +131,27 @@ lastwatt forecast            # show NWS hourly forecast
 
 ## Config
 
-See [config.yaml.sample](config.yaml.sample) for a full example with comments.
+See [config.yaml.sample](config.yaml.sample) for a full example with comments. The three curtailment modes each have their own section with `curtail` and `restore` action lists:
+
+```yaml
+grid:
+  curtail: [...]     # runs on grid power loss
+  restore: [...]     # runs when grid returns
+
+rates:
+  timezone: America/Denver
+  weekends_offpeak: true
+  peak: { start: "17:00", end: "21:00" }
+  mid_peak: { start: "13:00", end: "17:00" }
+  flow_override: true
+  curtail: [...]     # runs when entering a rate window
+  restore: [...]     # runs when leaving a rate window
+
+vacation:
+  poll_interval: 10m
+  curtail: [...]     # runs when Ecobee vacation detected
+  restore: [...]     # runs when vacation ends
+```
 
 ## Available Actions
 
