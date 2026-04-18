@@ -60,17 +60,17 @@ func testNow() time.Time {
 // scheduleAt creates a schedule active at the given time on the given weekday.
 func scheduleAt(name string, ref time.Time) config.Schedule {
 	day := ref.Weekday().String()[:3]
-	start := ref.Add(-1 * time.Minute).Format("15:04")
-	stop := ref.Add(1 * time.Hour).Format("15:04")
+	begin := ref.Add(-1 * time.Minute).Format("15:04")
+	end := ref.Add(1 * time.Hour).Format("15:04")
 	return config.Schedule{
 		Name:  name,
 		Days:  []string{day},
-		Start: start,
-		Stop:  stop,
-		Actions: []config.ActionStep{
+		Begin: begin,
+		End:   end,
+		Start: []config.ActionStep{
 			{Action: "test.curtail", Params: map[string]any{"label": name}},
 		},
-		Restore: []config.ActionStep{
+		Stop: []config.ActionStep{
 			{Action: "test.restore", Params: map[string]any{"label": name}},
 		},
 	}
@@ -79,11 +79,11 @@ func scheduleAt(name string, ref time.Time) config.Schedule {
 // scheduleAtWithFlow creates a schedule active at ref with flow_override on actions.
 func scheduleAtWithFlow(name string, ref time.Time) config.Schedule {
 	s := scheduleAt(name, ref)
-	for i := range s.Actions {
-		s.Actions[i].FlowOverride = true
+	for i := range s.Start {
+		s.Start[i].FlowOverride = true
 	}
-	for i := range s.Restore {
-		s.Restore[i].FlowOverride = true
+	for i := range s.Stop {
+		s.Stop[i].FlowOverride = true
 	}
 	return s
 }
@@ -91,17 +91,17 @@ func scheduleAtWithFlow(name string, ref time.Time) config.Schedule {
 // scheduleExpiredAt creates a schedule that ended before ref.
 func scheduleExpiredAt(name string, ref time.Time) config.Schedule {
 	day := ref.Weekday().String()[:3]
-	start := ref.Add(-2 * time.Hour).Format("15:04")
-	stop := ref.Add(-1 * time.Minute).Format("15:04")
+	begin := ref.Add(-2 * time.Hour).Format("15:04")
+	end := ref.Add(-1 * time.Minute).Format("15:04")
 	return config.Schedule{
 		Name:  name,
 		Days:  []string{day},
-		Start: start,
-		Stop:  stop,
-		Actions: []config.ActionStep{
+		Begin: begin,
+		End:   end,
+		Start: []config.ActionStep{
 			{Action: "test.curtail", Params: map[string]any{"label": name}},
 		},
-		Restore: []config.ActionStep{
+		Stop: []config.ActionStep{
 			{Action: "test.restore", Params: map[string]any{"label": name}},
 		},
 	}
@@ -294,13 +294,13 @@ func TestSchedule_Jitter_OffsetsStartTime(t *testing.T) {
 	// Create a schedule that starts exactly at now — without jitter it enters immediately
 	day := now.Weekday().String()[:3]
 	sched, store, curtailAct, _ := newTestSched(t, now, []config.Schedule{{
-		Name:    "test",
-		Days:    []string{day},
-		Start:   now.Format("15:04"),
-		Stop:    now.Add(1 * time.Hour).Format("15:04"),
-		Jitter:  15 * time.Minute,
-		Actions: []config.ActionStep{{Action: "test.curtail"}},
-		Restore: []config.ActionStep{{Action: "test.restore"}},
+		Name:   "test",
+		Days:   []string{day},
+		Begin:  now.Format("15:04"),
+		End:    now.Add(1 * time.Hour).Format("15:04"),
+		Jitter: 15 * time.Minute,
+		Start:  []config.ActionStep{{Action: "test.curtail"}},
+		Stop:   []config.ActionStep{{Action: "test.restore"}},
 	}})
 	_ = store
 	ctx := context.Background()
@@ -329,13 +329,13 @@ func TestSchedule_Jitter_RecomputesDaily(t *testing.T) {
 	now := testNow()
 	day := now.Weekday().String()[:3]
 	sched, _, _, _ := newTestSched(t, now, []config.Schedule{{
-		Name:    "test",
-		Days:    []string{day},
-		Start:   now.Add(-30 * time.Minute).Format("15:04"),
-		Stop:    now.Add(1 * time.Hour).Format("15:04"),
-		Jitter:  5 * time.Minute,
-		Actions: []config.ActionStep{{Action: "test.curtail"}},
-		Restore: []config.ActionStep{{Action: "test.restore"}},
+		Name:   "test",
+		Days:   []string{day},
+		Begin:  now.Add(-30 * time.Minute).Format("15:04"),
+		End:    now.Add(1 * time.Hour).Format("15:04"),
+		Jitter: 5 * time.Minute,
+		Start:  []config.ActionStep{{Action: "test.curtail"}},
+		Stop:   []config.ActionStep{{Action: "test.restore"}},
 	}})
 	ctx := context.Background()
 

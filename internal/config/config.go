@@ -22,10 +22,10 @@ type Config struct {
 	ratesLocation *time.Location // parsed from Rates.Timezone
 }
 
-// GridConfig defines actions to run on grid power loss and restore.
+// GridConfig defines actions to run on grid power loss and recovery.
 type GridConfig struct {
-	Curtail []ActionStep `yaml:"curtail"`
-	Restore []ActionStep `yaml:"restore"`
+	Start []ActionStep `yaml:"start"` // actions to run when grid goes down
+	Stop  []ActionStep `yaml:"stop"`  // actions to run when grid comes back
 }
 
 // RatesLocation returns the parsed timezone for rate schedules, or local time.
@@ -42,8 +42,8 @@ type RatesConfig struct {
 	WeekendsOffpeak bool         `yaml:"weekends_offpeak"`
 	Peak            *RateWindow  `yaml:"peak,omitempty"`
 	MidPeak         *RateWindow  `yaml:"mid_peak,omitempty"`
-	Curtail         []ActionStep `yaml:"curtail,omitempty"`
-	Restore         []ActionStep `yaml:"restore,omitempty"`
+	Start           []ActionStep `yaml:"start,omitempty"` // actions when entering a rate window
+	Stop            []ActionStep `yaml:"stop,omitempty"`  // actions when leaving a rate window
 }
 
 // RateWindow defines a daily time window for a rate tier.
@@ -54,18 +54,18 @@ type RateWindow struct {
 
 type VacationConfig struct {
 	PollInterval time.Duration `yaml:"poll_interval,omitempty"`
-	Curtail      []ActionStep  `yaml:"curtail,omitempty"`
-	Restore      []ActionStep  `yaml:"restore,omitempty"`
+	Start        []ActionStep  `yaml:"start,omitempty"` // actions when vacation detected
+	Stop         []ActionStep  `yaml:"stop,omitempty"`  // actions when vacation ends
 }
 
 type Schedule struct {
-	Name    string        `yaml:"name"`
-	Days    []string      `yaml:"days"`
-	Start   string        `yaml:"start"`
-	Stop    string        `yaml:"stop"`
-	Jitter  time.Duration `yaml:"jitter,omitempty"` // random offset +/- this duration
-	Actions []ActionStep  `yaml:"actions"`
-	Restore []ActionStep  `yaml:"restore"`
+	Name   string        `yaml:"name"`
+	Days   []string      `yaml:"days"`
+	Begin  string        `yaml:"begin"` // "HH:MM" window start
+	End    string        `yaml:"end"`   // "HH:MM" window end
+	Jitter time.Duration `yaml:"jitter,omitempty"`
+	Start  []ActionStep  `yaml:"start"` // actions when entering window
+	Stop   []ActionStep  `yaml:"stop"`  // actions when leaving window
 }
 
 type LocationConfig struct {
@@ -116,11 +116,10 @@ func HasFlowOverride(steps []ActionStep) bool {
 	return false
 }
 
-// FlowOverridePair returns the curtail and restore steps that participate
-// in flow override. The restore steps are the flow_override steps with
-// their state inverted (already defined in the restore recipe).
-func FlowOverridePair(curtail, restore []ActionStep) (curtailSteps, restoreSteps []ActionStep) {
-	return FlowOverrideSteps(curtail), FlowOverrideSteps(restore)
+// FlowOverridePair returns the start and stop steps that participate in
+// flow override.
+func FlowOverridePair(start, stop []ActionStep) (startSteps, stopSteps []ActionStep) {
+	return FlowOverrideSteps(start), FlowOverrideSteps(stop)
 }
 
 type OverrideRule struct {
@@ -147,23 +146,23 @@ func (r RatesConfig) RateSchedules() []Schedule {
 
 	if r.MidPeak != nil && r.MidPeak.Start != "" && r.MidPeak.End != "" {
 		schedules = append(schedules, Schedule{
-			Name:    "mid-peak",
-			Days:    days,
-			Start:   r.MidPeak.Start,
-			Stop:    r.MidPeak.End,
-			Actions: r.Curtail,
-			Restore: r.Restore,
+			Name:  "mid-peak",
+			Days:  days,
+			Begin: r.MidPeak.Start,
+			End:   r.MidPeak.End,
+			Start: r.Start,
+			Stop:  r.Stop,
 		})
 	}
 
 	if r.Peak != nil && r.Peak.Start != "" && r.Peak.End != "" {
 		schedules = append(schedules, Schedule{
-			Name:    "peak",
-			Days:    days,
-			Start:   r.Peak.Start,
-			Stop:    r.Peak.End,
-			Actions: r.Curtail,
-			Restore: r.Restore,
+			Name:  "peak",
+			Days:  days,
+			Begin: r.Peak.Start,
+			End:   r.Peak.End,
+			Start: r.Start,
+			Stop:  r.Stop,
 		})
 	}
 

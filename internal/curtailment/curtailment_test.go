@@ -91,8 +91,8 @@ func newVacationMonitor(store *state.Store, eng *recipeLog, sched *stubSched) *V
 		Eng:   eng,
 		Sched: sched,
 		Cfg: config.VacationConfig{
-			Curtail: []config.ActionStep{{Action: "test.curtail"}},
-			Restore: []config.ActionStep{{Action: "test.restore"}},
+			Start: []config.ActionStep{{Action: "test.curtail"}},
+			Stop:  []config.ActionStep{{Action: "test.restore"}},
 		},
 		Log: testLog,
 	}
@@ -350,12 +350,12 @@ func TestVacation_NilScheduleChecker(t *testing.T) {
 
 func newTestFlowOverride(store *state.Store, eng *recipeLog) *FlowOverride {
 	return &FlowOverride{
-		Store:   store,
-		Eng:     eng,
-		Curtail: []config.ActionStep{{Action: "test.curtail", FlowOverride: true}},
-		Restore: []config.ActionStep{{Action: "test.restore", FlowOverride: true}},
-		Log:     testLog,
-		Label:   "grid",
+		Store: store,
+		Eng:   eng,
+		Start: []config.ActionStep{{Action: "test.curtail", FlowOverride: true}},
+		Stop:  []config.ActionStep{{Action: "test.restore", FlowOverride: true}},
+		Log:   testLog,
+		Label: "grid",
 		StatusCheck: func() bool {
 			return store.GetStatus() == state.StatusCurtailed
 		},

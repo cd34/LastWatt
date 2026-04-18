@@ -21,12 +21,12 @@ state_file: /var/lib/lastwatt/state.json
 #   interval: 5s
 
 # --- Grid power loss ---
-# Actions to run when the monitored device stops responding.
+# start: actions run when the monitored device stops responding.
+# stop:  actions run when grid power returns.
 # Mark individual actions with flow_override: true to allow them to be
-# temporarily restored when water flow is detected (e.g., someone is
-# showering during an outage).
+# temporarily restored when water flow is detected.
 grid:
-  curtail:
+  start:
     - action: ecobee.read_mode      # save current thermostat state
     - action: ecobee.set_hold
       params:
@@ -48,14 +48,14 @@ grid:
     #     host: 192.168.1.X
     #     state: off
     #     label: poe_switch
-  restore:
+  stop:
     - action: ecobee.resume
     - action: gpio.set
       params:
         pin: "17"
         state: on
         label: water_heater
-      flow_override: true            # pairs with the curtail step above
+      flow_override: true            # pairs with the start step above
     - action: gpio.set
       params:
         pin: "27"
@@ -79,14 +79,14 @@ rates:
   mid_peak:
     start: "13:00"             # 1:00 PM
     end: "17:00"               # 5:00 PM
-  curtail:
+  start:
     - action: gpio.set
       params:
         pin: "17"
         state: off
         label: water_heater
       flow_override: true
-  restore:
+  stop:
     - action: gpio.set
       params:
         pin: "17"
@@ -95,22 +95,22 @@ rates:
       flow_override: true
 
 # --- Vacation mode ---
-# Polls the Ecobee thermostat for vacation events.  When vacation mode is
-# detected the water heater turns off.
+# Polls the Ecobee thermostat for vacation events.
+# start: actions when vacation detected.
+# stop:  actions when vacation ends (only if grid is up and no rate
+#        schedule is active).
 # Omit flow_override on steps — nobody is home so there is no reason
 # to heat water.  Add flow_override: true if someone is still present
 # (e.g., pet sitter, house guest).
-# When vacation ends, restore runs only if the grid is up AND no rate
-# schedule is active.
 vacation:
   poll_interval: 10m
-  curtail:
+  start:
     - action: gpio.set
       params:
         pin: "17"
         state: off
         label: water_heater
-  restore:
+  stop:
     - action: gpio.set
       params:
         pin: "17"
@@ -119,18 +119,18 @@ vacation:
 
 # --- Custom schedules (optional) ---
 # For anything the rates section doesn't cover.
-# jitter adds a random offset of +/- the specified duration to the start
-# time, recomputed each day.  Useful so that all devices on the same
-# schedule don't switch simultaneously.
+# begin/end define the time window, start/stop define the actions.
+# jitter adds a random offset of +/- the specified duration to the begin
+# time, recomputed each day.
 # schedules:
 #   - name: evening_lights
 #     days: [Mon, Tue, Wed, Thu, Fri]
-#     start: "22:00"
-#     stop: "06:00"
-#     jitter: 10m              # start anywhere from 21:50 to 22:10
-#     actions:
+#     begin: "22:00"
+#     end: "06:00"
+#     jitter: 10m              # begin anywhere from 21:50 to 22:10
+#     start:
 #       - action: shelly.set
 #         params: { host: 192.168.1.X, state: off, label: porch_light }
-#     restore:
+#     stop:
 #       - action: shelly.set
 #         params: { host: 192.168.1.X, state: on, label: porch_light }

@@ -12,8 +12,8 @@ func TestRateSchedules_PeakAndMidPeak(t *testing.T) {
 		WeekendsOffpeak: true,
 		Peak:            &RateWindow{Start: "17:00", End: "21:00"},
 		MidPeak:         &RateWindow{Start: "13:00", End: "17:00"},
-		Curtail:         []ActionStep{{Action: "gpio.set"}},
-		Restore:         []ActionStep{{Action: "gpio.set"}},
+		Start:           []ActionStep{{Action: "gpio.set"}},
+		Stop:            []ActionStep{{Action: "gpio.set"}},
 	}
 
 	scheds := r.RateSchedules()
@@ -25,16 +25,16 @@ func TestRateSchedules_PeakAndMidPeak(t *testing.T) {
 	if scheds[0].Name != "mid-peak" {
 		t.Errorf("expected first schedule 'mid-peak', got %q", scheds[0].Name)
 	}
-	if scheds[0].Start != "13:00" || scheds[0].Stop != "17:00" {
-		t.Errorf("mid-peak times wrong: %s-%s", scheds[0].Start, scheds[0].Stop)
+	if scheds[0].Begin != "13:00" || scheds[0].End != "17:00" {
+		t.Errorf("mid-peak times wrong: %s-%s", scheds[0].Begin, scheds[0].End)
 	}
 
 	// Peak second
 	if scheds[1].Name != "peak" {
 		t.Errorf("expected second schedule 'peak', got %q", scheds[1].Name)
 	}
-	if scheds[1].Start != "17:00" || scheds[1].Stop != "21:00" {
-		t.Errorf("peak times wrong: %s-%s", scheds[1].Start, scheds[1].Stop)
+	if scheds[1].Begin != "17:00" || scheds[1].End != "21:00" {
+		t.Errorf("peak times wrong: %s-%s", scheds[1].Begin, scheds[1].End)
 	}
 }
 

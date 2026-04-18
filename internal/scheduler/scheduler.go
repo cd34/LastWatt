@@ -59,7 +59,7 @@ func (s *Scheduler) SetLocation(loc *time.Location) {
 // HasFlowOverride returns true if any schedule action has flow_override set.
 func (s *Scheduler) HasFlowOverride() bool {
 	for _, sched := range s.schedules {
-		if config.HasFlowOverride(sched.Actions) {
+		if config.HasFlowOverride(sched.Start) {
 			return true
 		}
 	}
@@ -83,7 +83,7 @@ func (s *Scheduler) ReapplyActive(ctx context.Context) {
 	for _, sched := range s.schedules {
 		if s.active[sched.Name] {
 			s.log.Info("reapplying schedule after grid restore", "schedule", sched.Name)
-			if err := s.eng.RunRecipe(ctx, "sched:"+sched.Name, sched.Actions); err != nil {
+			if err := s.eng.RunRecipe(ctx, "sched:"+sched.Name, sched.Start); err != nil {
 				s.log.Error("schedule reapply failed", "schedule", sched.Name, "error", err)
 			}
 		}
@@ -145,7 +145,7 @@ func (s *Scheduler) evaluate(ctx context.Context) {
 	// Flow override: if a rate schedule is active and any of its actions
 	// have flow_override set, check flow state.
 	active := s.activeSchedule()
-	if active != nil && config.HasFlowOverride(active.Actions) {
+	if active != nil && config.HasFlowOverride(active.Start) {
 		s.evaluateFlowOverride(ctx, active)
 	} else if s.flowActive {
 		// Schedule ended while flow override was engaged — clean up
@@ -158,7 +158,7 @@ func (s *Scheduler) enter(ctx context.Context, sched config.Schedule) {
 	s.active[sched.Name] = true
 	s.store.Set("schedule.active", sched.Name)
 
-	if err := s.eng.RunRecipe(ctx, "sched:"+sched.Name, sched.Actions); err != nil {
+	if err := s.eng.RunRecipe(ctx, "sched:"+sched.Name, sched.Start); err != nil {
 		s.log.Error("schedule actions failed", "schedule", sched.Name, "error", err)
 	}
 }
@@ -188,7 +188,7 @@ func (s *Scheduler) leave(ctx context.Context, sched config.Schedule) {
 		return
 	}
 
-	if err := s.eng.RunRecipe(ctx, "sched-restore:"+sched.Name, sched.Restore); err != nil {
+	if err := s.eng.RunRecipe(ctx, "sched-restore:"+sched.Name, sched.Stop); err != nil {
 		s.log.Error("schedule restore failed", "schedule", sched.Name, "error", err)
 	}
 }
@@ -200,14 +200,14 @@ func (s *Scheduler) evaluateFlowOverride(ctx context.Context, sched *config.Sche
 		s.flowActive = true
 		s.log.Info("flow detected during rate schedule — temporarily restoring flow_override actions",
 			"schedule", sched.Name)
-		restoreSteps := config.FlowOverrideSteps(sched.Restore)
+		restoreSteps := config.FlowOverrideSteps(sched.Stop)
 		if err := s.eng.RunRecipe(ctx, "flow-override:"+sched.Name, restoreSteps); err != nil {
 			s.log.Error("flow override restore failed", "error", err)
 		}
 	} else if flowing != "true" && s.flowActive {
 		s.flowActive = false
 		s.log.Info("flow stopped — re-curtailing flow_override actions", "schedule", sched.Name)
-		curtailSteps := config.FlowOverrideSteps(sched.Actions)
+		curtailSteps := config.FlowOverrideSteps(sched.Start)
 		if err := s.eng.RunRecipe(ctx, "flow-recurtail:"+sched.Name, curtailSteps); err != nil {
 			s.log.Error("flow re-curtail failed", "error", err)
 		}
@@ -234,12 +234,12 @@ func (s *Scheduler) inWindow(sched config.Schedule, now time.Time) bool {
 		return false
 	}
 
-	start, err := parseTime(sched.Start, now)
+	start, err := parseTime(sched.Begin, now)
 	if err != nil {
 		s.log.Error("bad schedule start time", "schedule", sched.Name, "error", err)
 		return false
 	}
-	stop, err := parseTime(sched.Stop, now)
+	stop, err := parseTime(sched.End, now)
 	if err != nil {
 		s.log.Error("bad schedule stop time", "schedule", sched.Name, "error", err)
 		return false
