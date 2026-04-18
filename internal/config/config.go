@@ -55,6 +55,7 @@ type RateWindow struct {
 
 type VacationConfig struct {
 	PollInterval time.Duration `yaml:"poll_interval,omitempty"`
+	FlowOverride bool          `yaml:"flow_override"`
 	Curtail      []ActionStep  `yaml:"curtail,omitempty"`
 	Restore      []ActionStep  `yaml:"restore,omitempty"`
 }

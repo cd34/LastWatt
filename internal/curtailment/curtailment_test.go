@@ -333,22 +333,25 @@ func TestScenario_VacationEndAfterAllClear(t *testing.T) {
 
 func TestShouldFlowOverride(t *testing.T) {
 	tests := []struct {
-		name     string
-		vacation bool
-		flowing  bool
-		want     bool
+		name         string
+		vacation     bool
+		vacOverride  bool
+		flowing      bool
+		want         bool
 	}{
-		{"flowing, no vacation — override allowed", false, true, true},
-		{"flowing, vacation — override blocked", true, true, false},
-		{"not flowing, no vacation — no override", false, false, false},
-		{"not flowing, vacation — no override", true, false, false},
+		{"flowing, no vacation", false, false, true, true},
+		{"flowing, vacation, override disabled", true, false, true, false},
+		{"flowing, vacation, override enabled", true, true, true, true},
+		{"not flowing, no vacation", false, false, false, false},
+		{"not flowing, vacation", true, false, false, false},
+		{"not flowing, vacation, override enabled", true, true, false, false},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := ShouldFlowOverride(tt.vacation, tt.flowing)
+			got := ShouldFlowOverride(tt.vacation, tt.vacOverride, tt.flowing)
 			if got != tt.want {
-				t.Errorf("ShouldFlowOverride(vacation=%v, flowing=%v) = %v, want %v",
-					tt.vacation, tt.flowing, got, tt.want)
+				t.Errorf("ShouldFlowOverride(vac=%v, vacOverride=%v, flowing=%v) = %v, want %v",
+					tt.vacation, tt.vacOverride, tt.flowing, got, tt.want)
 			}
 		})
 	}
@@ -438,6 +441,26 @@ func TestGridFlow_BlockedDuringVacation(t *testing.T) {
 	}
 	if len(eng.calls) != 0 {
 		t.Fatal("no recipes should run during vacation")
+	}
+}
+
+func TestGridFlow_AllowedDuringVacation_WhenEnabled(t *testing.T) {
+	store := newTestStore(t)
+	eng := &recipeLog{}
+	gf := newGridFlowOverride(store, eng)
+	gf.VacationFlowOverride = true
+
+	store.SetStatus(state.StatusCurtailed)
+	store.Set("ecobee.vacation_active", "true")
+	store.Set("flow.flowing", "true")
+
+	gf.Evaluate(context.Background())
+
+	if !gf.Active {
+		t.Fatal("flow override should activate during vacation when enabled")
+	}
+	if !eng.has("grid-flow-override") {
+		t.Fatal("expected grid-flow-override recipe to run")
 	}
 }
 

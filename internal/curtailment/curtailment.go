@@ -25,10 +25,16 @@ func ShouldRestore(gridStatus state.Status, vacationActive bool, scheduleActive 
 }
 
 // ShouldFlowOverride returns true if flow-based override is allowed.
-// Flow override is permitted during grid or rate curtailment, but NOT
-// during vacation (nobody is home).
-func ShouldFlowOverride(vacationActive bool, flowing bool) bool {
-	return flowing && !vacationActive
+// Flow override is blocked during vacation unless vacationFlowOverride
+// is explicitly enabled.
+func ShouldFlowOverride(vacationActive bool, vacationFlowOverride bool, flowing bool) bool {
+	if !flowing {
+		return false
+	}
+	if vacationActive && !vacationFlowOverride {
+		return false
+	}
+	return true
 }
 
 // FlowOverride tracks flow-based water heater override state for grid
@@ -36,12 +42,13 @@ func ShouldFlowOverride(vacationActive bool, flowing bool) bool {
 // temporarily restores. When flow stops, it re-curtails. Disabled during
 // vacation.
 type FlowOverride struct {
-	Store   *state.Store
-	Eng     RecipeRunner
-	Curtail []config.ActionStep // actions to turn water heater off
-	Restore []config.ActionStep // actions to turn water heater on
-	Log     *slog.Logger
-	Active  bool
+	Store                *state.Store
+	Eng                  RecipeRunner
+	Curtail              []config.ActionStep // actions to turn water heater off
+	Restore              []config.ActionStep // actions to turn water heater on
+	Log                  *slog.Logger
+	VacationFlowOverride bool // if true, flow override works even during vacation
+	Active               bool
 }
 
 // Evaluate checks current flow state and toggles the override. Should be
@@ -55,14 +62,11 @@ func (f *FlowOverride) Evaluate(ctx context.Context) {
 		return
 	}
 
-	// No flow override during vacation
-	if v, _ := f.Store.Get("ecobee.vacation_active"); v == "true" {
-		return
-	}
-
+	vacActive, _ := f.Store.Get("ecobee.vacation_active")
 	flowing, _ := f.Store.Get("flow.flowing")
+	allowed := ShouldFlowOverride(vacActive == "true", f.VacationFlowOverride, flowing == "true")
 
-	if flowing == "true" && !f.Active {
+	if allowed && !f.Active {
 		f.Active = true
 		f.Log.Info("flow detected during grid outage — temporarily restoring water heater")
 		if err := f.Eng.RunRecipe(ctx, "grid-flow-override", f.Restore); err != nil {
