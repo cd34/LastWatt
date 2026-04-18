@@ -93,10 +93,10 @@ func daemonCmd() *cobra.Command {
 			}
 
 			// Validate recipes at startup
-			if err := eng.ValidateRecipe("curtail", cfg.Curtail); err != nil {
+			if err := eng.ValidateRecipe("curtail", cfg.Grid.Curtail); err != nil {
 				return fmt.Errorf("invalid curtail recipe: %w", err)
 			}
-			if err := eng.ValidateRecipe("restore", cfg.Restore); err != nil {
+			if err := eng.ValidateRecipe("restore", cfg.Grid.Restore); err != nil {
 				return fmt.Errorf("invalid restore recipe: %w", err)
 			}
 
@@ -158,6 +158,29 @@ func daemonCmd() *cobra.Command {
 				go sched.Run(ctx)
 			}
 
+			// Start grid flow override monitor if configured
+			if cfg.Grid.FlowOverride {
+				gridFlow := &curtailment.FlowOverride{
+					Store:   store,
+					Eng:     eng,
+					Curtail: cfg.Grid.Curtail,
+					Restore: cfg.Grid.Restore,
+					Log:     log,
+				}
+				go func() {
+					ticker := time.NewTicker(30 * time.Second)
+					defer ticker.Stop()
+					for {
+						select {
+						case <-ctx.Done():
+							return
+						case <-ticker.C:
+							gridFlow.Evaluate(ctx)
+						}
+					}
+				}()
+			}
+
 			// Start vacation monitor if configured
 			var vacMon *curtailment.VacationMonitor
 			if len(cfg.Vacation.Curtail) > 0 || len(cfg.Vacation.Restore) > 0 {
@@ -201,7 +224,7 @@ func daemonCmd() *cobra.Command {
 							log.Error("failed to save state", "error", err)
 						}
 						go func() {
-							if err := eng.RunRecipe(ctx, "curtail", cfg.Curtail); err != nil {
+							if err := eng.RunRecipe(ctx, "curtail", cfg.Grid.Curtail); err != nil {
 								log.Error("curtail recipe failed", "error", err)
 							}
 						}()
@@ -211,7 +234,7 @@ func daemonCmd() *cobra.Command {
 							log.Error("failed to save state", "error", err)
 						}
 						go func() {
-							if err := eng.RunRecipe(ctx, "restore", cfg.Restore); err != nil {
+							if err := eng.RunRecipe(ctx, "restore", cfg.Grid.Restore); err != nil {
 								log.Error("restore recipe failed", "error", err)
 							}
 							// If a schedule is active, reapply its actions
@@ -277,9 +300,9 @@ func runCmd() *cobra.Command {
 
 			switch args[0] {
 			case "curtail":
-				return eng.RunRecipe(cmd.Context(), "curtail", cfg.Curtail)
+				return eng.RunRecipe(cmd.Context(), "curtail", cfg.Grid.Curtail)
 			case "restore":
-				return eng.RunRecipe(cmd.Context(), "restore", cfg.Restore)
+				return eng.RunRecipe(cmd.Context(), "restore", cfg.Grid.Restore)
 			default:
 				return fmt.Errorf("unknown recipe: %s (use 'curtail' or 'restore')", args[0])
 			}
