@@ -30,7 +30,11 @@ type Scheduler struct {
 	eng       *engine.Engine
 	store     *state.Store
 	log       *slog.Logger
-	active    map[string]bool
+	active       map[string]bool
+	now          func() time.Time // defaults to time.Now; override in tests
+	loc          *time.Location   // timezone for schedule evaluation
+	flowOverride bool             // allow flow to temporarily override rate curtailment
+	flowActive   bool             // tracks whether flow override is currently engaged
 }
 
 func New(schedules []config.Schedule, eng *engine.Engine, store *state.Store, log *slog.Logger) *Scheduler {
@@ -40,7 +44,20 @@ func New(schedules []config.Schedule, eng *engine.Engine, store *state.Store, lo
 		store:     store,
 		log:       log,
 		active:    make(map[string]bool),
+		now:       time.Now,
 	}
+}
+
+// SetLocation sets the timezone used for schedule time evaluation.
+func (s *Scheduler) SetLocation(loc *time.Location) {
+	s.loc = loc
+}
+
+// SetFlowOverride enables the flow-based water heater override during
+// rate schedules. When flow is detected, the schedule restore recipe runs;
+// when flow stops, the curtail recipe is reapplied.
+func (s *Scheduler) SetFlowOverride(enabled bool) {
+	s.flowOverride = enabled
 }
 
 // ActiveSchedule returns the name of the currently active schedule, or "".
@@ -89,7 +106,10 @@ func (s *Scheduler) Run(ctx context.Context) {
 }
 
 func (s *Scheduler) evaluate(ctx context.Context) {
-	now := time.Now()
+	now := s.now()
+	if s.loc != nil {
+		now = now.In(s.loc)
+	}
 
 	for _, sched := range s.schedules {
 		inWindow := s.inWindow(sched, now)
@@ -100,6 +120,15 @@ func (s *Scheduler) evaluate(ctx context.Context) {
 		} else if !inWindow && wasActive {
 			s.leave(ctx, sched)
 		}
+	}
+
+	// Flow override: if a rate schedule is active and flow is detected,
+	// temporarily restore the water heater. When flow stops, re-curtail.
+	if s.flowOverride && s.ActiveSchedule() != "" {
+		s.evaluateFlowOverride(ctx)
+	} else if s.flowActive {
+		// Schedule ended while flow override was engaged — clean up
+		s.flowActive = false
 	}
 }
 
@@ -116,6 +145,14 @@ func (s *Scheduler) enter(ctx context.Context, sched config.Schedule) {
 func (s *Scheduler) leave(ctx context.Context, sched config.Schedule) {
 	s.log.Info("schedule leaving window", "schedule", sched.Name)
 	s.active[sched.Name] = false
+
+	// Update store to reflect remaining active schedule (if any)
+	if remaining := s.ActiveSchedule(); remaining != "" {
+		s.store.Set("schedule.active", remaining)
+		s.log.Info("skipping schedule restore — other schedule still active",
+			"ended", sched.Name, "active", remaining)
+		return
+	}
 	s.store.Set("schedule.active", "")
 
 	// Don't restore if grid is curtailed — let grid restore handle it
@@ -124,9 +161,61 @@ func (s *Scheduler) leave(ctx context.Context, sched config.Schedule) {
 		return
 	}
 
+	// Don't restore if vacation mode is active
+	if v, _ := s.store.Get("ecobee.vacation_active"); v == "true" {
+		s.log.Info("skipping schedule restore — vacation mode active", "schedule", sched.Name)
+		return
+	}
+
 	if err := s.eng.RunRecipe(ctx, "sched-restore:"+sched.Name, sched.Restore); err != nil {
 		s.log.Error("schedule restore failed", "schedule", sched.Name, "error", err)
 	}
+}
+
+func (s *Scheduler) evaluateFlowOverride(ctx context.Context) {
+	// Check if vacation mode is active — flow override is disabled during vacation
+	if v, _ := s.store.Get("ecobee.vacation_active"); v == "true" {
+		return
+	}
+
+	flowing, _ := s.store.Get("flow.flowing")
+
+	if flowing == "true" && !s.flowActive {
+		// Flow just started — restore water heater temporarily
+		s.flowActive = true
+		s.log.Info("flow detected during rate schedule — temporarily restoring water heater")
+		active := s.activeSchedule()
+		if active != nil {
+			if err := s.eng.RunRecipe(ctx, "flow-override:"+active.Name, active.Restore); err != nil {
+				s.log.Error("flow override restore failed", "error", err)
+			}
+		}
+	} else if flowing != "true" && s.flowActive {
+		// Flow stopped — re-curtail
+		s.flowActive = false
+		s.log.Info("flow stopped — re-curtailing water heater")
+		active := s.activeSchedule()
+		if active != nil {
+			if err := s.eng.RunRecipe(ctx, "flow-recurtail:"+active.Name, active.Actions); err != nil {
+				s.log.Error("flow re-curtail failed", "error", err)
+			}
+		}
+	}
+}
+
+// activeSchedule returns the config for the first currently active schedule.
+func (s *Scheduler) activeSchedule() *config.Schedule {
+	for i, sched := range s.schedules {
+		if s.active[sched.Name] {
+			return &s.schedules[i]
+		}
+	}
+	return nil
+}
+
+// FlowOverrideActive reports whether the flow override is currently engaged.
+func (s *Scheduler) FlowOverrideActive() bool {
+	return s.flowActive
 }
 
 func (s *Scheduler) inWindow(sched config.Schedule, now time.Time) bool {
