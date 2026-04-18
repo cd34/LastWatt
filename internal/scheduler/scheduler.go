@@ -33,8 +33,9 @@ type Scheduler struct {
 	active       map[string]bool
 	now          func() time.Time // defaults to time.Now; override in tests
 	loc          *time.Location   // timezone for schedule evaluation
-	flowOverride bool             // allow flow to temporarily override rate curtailment
-	flowActive   bool             // tracks whether flow override is currently engaged
+	flowOverride         bool // allow flow to temporarily override rate curtailment
+	flowActive           bool // tracks whether flow override is currently engaged
+	vacationFlowOverride bool // if true, flow override works even during vacation
 }
 
 func New(schedules []config.Schedule, eng *engine.Engine, store *state.Store, log *slog.Logger) *Scheduler {
@@ -58,6 +59,12 @@ func (s *Scheduler) SetLocation(loc *time.Location) {
 // when flow stops, the curtail recipe is reapplied.
 func (s *Scheduler) SetFlowOverride(enabled bool) {
 	s.flowOverride = enabled
+}
+
+// SetVacationFlowOverride controls whether flow override is allowed during
+// vacation mode. Defaults to false.
+func (s *Scheduler) SetVacationFlowOverride(enabled bool) {
+	s.vacationFlowOverride = enabled
 }
 
 // ActiveSchedule returns the name of the currently active schedule, or "".
@@ -173,8 +180,8 @@ func (s *Scheduler) leave(ctx context.Context, sched config.Schedule) {
 }
 
 func (s *Scheduler) evaluateFlowOverride(ctx context.Context) {
-	// Check if vacation mode is active — flow override is disabled during vacation
-	if v, _ := s.store.Get("ecobee.vacation_active"); v == "true" {
+	vacActive, _ := s.store.Get("ecobee.vacation_active")
+	if vacActive == "true" && !s.vacationFlowOverride {
 		return
 	}
 

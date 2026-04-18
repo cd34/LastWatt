@@ -85,12 +85,15 @@ rates:
 
 # --- Vacation mode ---
 # Polls the Ecobee thermostat for vacation events.  When vacation mode is
-# detected the water heater turns off.  Flow override is DISABLED — nobody
-# is home so there is no reason to heat water.
+# detected the water heater turns off.
+# flow_override defaults to false — nobody is home so there is no reason
+# to heat water.  Set to true if you want flow detection to still work
+# during vacation (e.g., pet sitter, house guest).
 # When vacation ends, restore runs only if the grid is up AND no rate
 # schedule is active.
 vacation:
   poll_interval: 10m
+  flow_override: false
   curtail:
     - action: gpio.set
       params:

@@ -349,6 +349,28 @@ func TestSchedule_FlowOverride_BlockedDuringVacation(t *testing.T) {
 	}
 }
 
+func TestSchedule_FlowOverride_AllowedDuringVacation_WhenEnabled(t *testing.T) {
+	now := testNow()
+	sched, store, _, restoreAct := newTestSched(t, now, []config.Schedule{scheduleAt("peak", now)})
+	sched.SetFlowOverride(true)
+	sched.SetVacationFlowOverride(true)
+	ctx := context.Background()
+
+	sched.evaluate(ctx)
+	store.Set("ecobee.vacation_active", "true")
+
+	restoreAct.reset()
+	store.Set("flow.flowing", "true")
+	sched.evaluate(ctx)
+
+	if !sched.FlowOverrideActive() {
+		t.Fatal("flow override should activate during vacation when enabled")
+	}
+	if restoreAct.callCount() == 0 {
+		t.Fatal("expected restore to run")
+	}
+}
+
 func TestSchedule_FlowOverride_DisabledByDefault(t *testing.T) {
 	now := testNow()
 	sched, store, _, restoreAct := newTestSched(t, now, []config.Schedule{scheduleAt("peak", now)})

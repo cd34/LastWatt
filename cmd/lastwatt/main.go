@@ -155,17 +155,21 @@ func daemonCmd() *cobra.Command {
 				if cfg.Rates.FlowOverride {
 					sched.SetFlowOverride(true)
 				}
+				if cfg.Vacation.FlowOverride {
+					sched.SetVacationFlowOverride(true)
+				}
 				go sched.Run(ctx)
 			}
 
 			// Start grid flow override monitor if configured
 			if cfg.Grid.FlowOverride {
 				gridFlow := &curtailment.FlowOverride{
-					Store:   store,
-					Eng:     eng,
-					Curtail: cfg.Grid.Curtail,
-					Restore: cfg.Grid.Restore,
-					Log:     log,
+					Store:                store,
+					Eng:                  eng,
+					Curtail:              cfg.Grid.Curtail,
+					Restore:              cfg.Grid.Restore,
+					Log:                  log,
+					VacationFlowOverride: cfg.Vacation.FlowOverride,
 				}
 				go func() {
 					ticker := time.NewTicker(30 * time.Second)
