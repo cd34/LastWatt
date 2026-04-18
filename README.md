@@ -240,16 +240,16 @@ The daemon runs several background data feeds:
 
 ## Hardware
 
-| Device | Purpose | Link |
-|---|---|---|
-| Raspberry Pi | Runs the daemon, GPIO for relays/LEDs | |
-| [Shelly 1 Mini Gen3](https://us.shelly.com/products/shelly-1-mini-gen3) | Switches contactor coil for water heater (local HTTP API) | |
-| [Shelly PM Mini Gen3](https://us.shelly.com/products/shelly-pm-mini-gen3) | Power monitoring without relay | |
-| 2-pole 30A/240V contactor (120V coil) | Switches water heater power (e.g., Packard C230B) | |
-| [TUF-2000M ultrasonic flow meter](https://www.aliexpress.us/item/3256808444609453.html) | Clamp-on flow detection for flow_override (Modbus RTU) | |
-| [Olimex USB-RS485](https://www.digikey.com/en/products/detail/olimex-ltd/USB-RS485/21661988) | Connects Pi to TUF-2000M via Modbus RTU | |
-| [Ecobee thermostat](https://www.ecobee.com/) | Temperature holds during curtailment, vacation mode detection | |
-| [WeatherFlow Tempest](https://weatherflow.com/tempest-weather-system/) | Outdoor weather data via local UDP | |
+| Device | Purpose |
+|---|---|
+| Raspberry Pi | Runs the daemon, GPIO for relays/LEDs |
+| [Shelly 1 Mini Gen3](https://us.shelly.com/products/shelly-1-mini-gen3) | Network relay, switches contactor coil for water heater via local HTTP API |
+| [Shelly PM Mini Gen3](https://us.shelly.com/products/shelly-pm-mini-gen3) | Power monitoring without relay |
+| 2-pole 30A/240V contactor (120V coil) | Switches water heater power (e.g., Packard C230B) |
+| [TUF-2000M ultrasonic flow meter](https://www.aliexpress.us/item/3256808444609453.html) | Clamp-on flow detection for flow_override via Modbus RTU |
+| [Olimex USB-RS485](https://www.digikey.com/en/products/detail/olimex-ltd/USB-RS485/21661988) | Connects Pi to TUF-2000M via Modbus RTU |
+| [Ecobee thermostat](https://www.ecobee.com/) | Temperature holds during curtailment, vacation mode detection |
+| [WeatherFlow Tempest](https://weatherflow.com/tempest-weather-system/) | Outdoor weather data via local UDP |
 
 ## License
 
