@@ -41,6 +41,7 @@ type Listener struct {
 	port     string
 	baud     int
 	slaveID  byte
+	store    actions.StateStore
 }
 
 func NewListener(log *slog.Logger, port string, baud int, slaveID byte) *Listener {
@@ -59,6 +60,11 @@ func NewListener(log *slog.Logger, port string, baud int, slaveID byte) *Listene
 		baud:    baud,
 		slaveID: slaveID,
 	}
+}
+
+// SetStore configures a state store for the listener to update on each poll.
+func (l *Listener) SetStore(store actions.StateStore) {
+	l.store = store
 }
 
 // Flowing returns true if water flow was detected on the last poll.
@@ -133,6 +139,11 @@ func (l *Listener) poll(client modbus.Client) {
 	l.flowing = rate > 0.01 // threshold: >0.01 m³/h ≈ some flow
 	l.lastRead = time.Now()
 	l.mu.Unlock()
+
+	if l.store != nil {
+		l.store.Set("flow.rate", fmt.Sprintf("%.4f", rate))
+		l.store.Set("flow.flowing", fmt.Sprintf("%t", l.flowing))
+	}
 
 	l.log.Debug("flow poll", "rate_m3h", rate, "flowing", l.flowing)
 }

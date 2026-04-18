@@ -12,9 +12,10 @@ type Config struct {
 	Monitor   MonitorConfig  `yaml:"monitor"`
 	Location  LocationConfig `yaml:"location"`
 	StateFile string         `yaml:"state_file"`
-	Grid      GridConfig     `yaml:"grid"`
-	Rates     RatesConfig    `yaml:"rates,omitempty"`
-	Vacation  VacationConfig `yaml:"vacation,omitempty"`
+	Grid      GridConfig       `yaml:"grid"`
+	Rates     RatesConfig      `yaml:"rates,omitempty"`
+	Vacation  VacationConfig   `yaml:"vacation,omitempty"`
+	FlowMeter *FlowMeterConfig `yaml:"flow_meter,omitempty"`
 	Schedules []Schedule     `yaml:"schedules,omitempty"`
 	Overrides []OverrideRule `yaml:"overrides,omitempty"`
 
@@ -23,9 +24,8 @@ type Config struct {
 
 // GridConfig defines actions to run on grid power loss and restore.
 type GridConfig struct {
-	FlowOverride bool         `yaml:"flow_override"`
-	Curtail      []ActionStep `yaml:"curtail"`
-	Restore      []ActionStep `yaml:"restore"`
+	Curtail []ActionStep `yaml:"curtail"`
+	Restore []ActionStep `yaml:"restore"`
 }
 
 // RatesLocation returns the parsed timezone for rate schedules, or local time.
@@ -38,13 +38,12 @@ func (c *Config) RatesLocation() *time.Location {
 
 // RatesConfig defines time-of-use electricity rate windows.
 type RatesConfig struct {
-	Timezone       string       `yaml:"timezone"`
-	WeekendsOffpeak bool        `yaml:"weekends_offpeak"`
-	Peak           *RateWindow  `yaml:"peak,omitempty"`
-	MidPeak        *RateWindow  `yaml:"mid_peak,omitempty"`
-	FlowOverride   bool         `yaml:"flow_override"`
-	Curtail        []ActionStep `yaml:"curtail,omitempty"`
-	Restore        []ActionStep `yaml:"restore,omitempty"`
+	Timezone        string       `yaml:"timezone"`
+	WeekendsOffpeak bool         `yaml:"weekends_offpeak"`
+	Peak            *RateWindow  `yaml:"peak,omitempty"`
+	MidPeak         *RateWindow  `yaml:"mid_peak,omitempty"`
+	Curtail         []ActionStep `yaml:"curtail,omitempty"`
+	Restore         []ActionStep `yaml:"restore,omitempty"`
 }
 
 // RateWindow defines a daily time window for a rate tier.
@@ -55,7 +54,6 @@ type RateWindow struct {
 
 type VacationConfig struct {
 	PollInterval time.Duration `yaml:"poll_interval,omitempty"`
-	FlowOverride bool          `yaml:"flow_override"`
 	Curtail      []ActionStep  `yaml:"curtail,omitempty"`
 	Restore      []ActionStep  `yaml:"restore,omitempty"`
 }
@@ -82,9 +80,46 @@ type MonitorConfig struct {
 	RecoverThreshold int           `yaml:"recover_threshold"`
 }
 
+// FlowMeterConfig defines the connection to a TUF-2000M flow meter.
+type FlowMeterConfig struct {
+	Port     string        `yaml:"port"`      // serial port (default /dev/ttyUSB0)
+	Baud     int           `yaml:"baud"`      // baud rate (default 9600)
+	SlaveID  int           `yaml:"slave_id"`  // Modbus slave address (default 1)
+	Interval time.Duration `yaml:"interval"`  // poll interval (default 5s)
+}
+
 type ActionStep struct {
-	Action string         `yaml:"action"`
-	Params map[string]any `yaml:"params,omitempty"`
+	Action       string         `yaml:"action"`
+	Params       map[string]any `yaml:"params,omitempty"`
+	FlowOverride bool           `yaml:"flow_override,omitempty"`
+}
+
+// FlowOverrideSteps returns only the steps that have flow_override set.
+func FlowOverrideSteps(steps []ActionStep) []ActionStep {
+	var out []ActionStep
+	for _, s := range steps {
+		if s.FlowOverride {
+			out = append(out, s)
+		}
+	}
+	return out
+}
+
+// HasFlowOverride returns true if any step has flow_override set.
+func HasFlowOverride(steps []ActionStep) bool {
+	for _, s := range steps {
+		if s.FlowOverride {
+			return true
+		}
+	}
+	return false
+}
+
+// FlowOverridePair returns the curtail and restore steps that participate
+// in flow override. The restore steps are the flow_override steps with
+// their state inverted (already defined in the restore recipe).
+func FlowOverridePair(curtail, restore []ActionStep) (curtailSteps, restoreSteps []ActionStep) {
+	return FlowOverrideSteps(curtail), FlowOverrideSteps(restore)
 }
 
 type OverrideRule struct {

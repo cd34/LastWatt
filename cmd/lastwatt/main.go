@@ -14,6 +14,7 @@ import (
 
 	"github.com/mcd/lastwatt/internal/actions"
 	"github.com/mcd/lastwatt/internal/actions/ecobee"
+	"github.com/mcd/lastwatt/internal/actions/flow"
 	_ "github.com/mcd/lastwatt/internal/actions/gpio"
 	_ "github.com/mcd/lastwatt/internal/actions/shelly"
 	"github.com/mcd/lastwatt/internal/actions/tempest"
@@ -144,6 +145,25 @@ func daemonCmd() *cobra.Command {
 				}()
 			}
 
+			// Start flow meter listener in background
+			if cfg.FlowMeter != nil {
+				interval := cfg.FlowMeter.Interval
+				if interval == 0 {
+					interval = 5 * time.Second
+				}
+				fl := flow.NewListener(log,
+					cfg.FlowMeter.Port,
+					cfg.FlowMeter.Baud,
+					byte(cfg.FlowMeter.SlaveID),
+				)
+				fl.SetStore(store)
+				go func() {
+					if err := fl.Run(ctx, interval); err != nil {
+						log.Error("flow listener error", "error", err)
+					}
+				}()
+			}
+
 			// Start Ecobee keepalive to prevent OAuth session from going stale
 			go ecobee.StartKeepAlive(ctx, 10*time.Minute, store, log)
 
@@ -152,24 +172,22 @@ func daemonCmd() *cobra.Command {
 			if len(cfg.Schedules) > 0 {
 				sched = scheduler.New(cfg.Schedules, eng, store, log)
 				sched.SetLocation(cfg.RatesLocation())
-				if cfg.Rates.FlowOverride {
-					sched.SetFlowOverride(true)
-				}
-				if cfg.Vacation.FlowOverride {
-					sched.SetVacationFlowOverride(true)
-				}
 				go sched.Run(ctx)
 			}
 
-			// Start grid flow override monitor if configured
-			if cfg.Grid.FlowOverride {
+			// Start grid flow override monitor for actions marked flow_override
+			gridFlowCurtail, gridFlowRestore := config.FlowOverridePair(cfg.Grid.Curtail, cfg.Grid.Restore)
+			if len(gridFlowCurtail) > 0 || len(gridFlowRestore) > 0 {
 				gridFlow := &curtailment.FlowOverride{
-					Store:                store,
-					Eng:                  eng,
-					Curtail:              cfg.Grid.Curtail,
-					Restore:              cfg.Grid.Restore,
-					Log:                  log,
-					VacationFlowOverride: cfg.Vacation.FlowOverride,
+					Store:   store,
+					Eng:     eng,
+					Curtail: gridFlowCurtail,
+					Restore: gridFlowRestore,
+					Log:     log,
+					Label:   "grid",
+					StatusCheck: func() bool {
+						return store.GetStatus() == state.StatusCurtailed
+					},
 				}
 				go func() {
 					ticker := time.NewTicker(30 * time.Second)
