@@ -43,6 +43,13 @@ func Get(name string) (Action, error) {
 	return a, nil
 }
 
+// Unregister removes an action from the global registry (for testing).
+func Unregister(name string) {
+	mu.Lock()
+	defer mu.Unlock()
+	delete(registry, name)
+}
+
 // List returns the names of all registered actions.
 func List() []string {
 	mu.RLock()

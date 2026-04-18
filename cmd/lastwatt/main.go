@@ -18,6 +18,7 @@ import (
 	_ "github.com/mcd/lastwatt/internal/actions/shelly"
 	"github.com/mcd/lastwatt/internal/actions/tempest"
 	"github.com/mcd/lastwatt/internal/config"
+	"github.com/mcd/lastwatt/internal/curtailment"
 	"github.com/mcd/lastwatt/internal/engine"
 	"github.com/mcd/lastwatt/internal/forecast"
 	"github.com/mcd/lastwatt/internal/monitor"
@@ -146,11 +147,39 @@ func daemonCmd() *cobra.Command {
 			// Start Ecobee keepalive to prevent OAuth session from going stale
 			go ecobee.StartKeepAlive(ctx, 10*time.Minute, store, log)
 
-			// Start schedule engine
+			// Start schedule engine (includes any rate-based schedules)
 			var sched *scheduler.Scheduler
 			if len(cfg.Schedules) > 0 {
 				sched = scheduler.New(cfg.Schedules, eng, store, log)
+				sched.SetLocation(cfg.RatesLocation())
+				if cfg.Rates.FlowOverride {
+					sched.SetFlowOverride(true)
+				}
 				go sched.Run(ctx)
+			}
+
+			// Start vacation monitor if configured
+			var vacMon *curtailment.VacationMonitor
+			if len(cfg.Vacation.Curtail) > 0 || len(cfg.Vacation.Restore) > 0 {
+				if err := eng.ValidateRecipe("vacation-curtail", cfg.Vacation.Curtail); err != nil {
+					return fmt.Errorf("invalid vacation curtail recipe: %w", err)
+				}
+				if err := eng.ValidateRecipe("vacation-restore", cfg.Vacation.Restore); err != nil {
+					return fmt.Errorf("invalid vacation restore recipe: %w", err)
+				}
+				vacInterval := cfg.Vacation.PollInterval
+				if vacInterval == 0 {
+					vacInterval = 10 * time.Minute
+				}
+				vacMon = &curtailment.VacationMonitor{
+					Store: store,
+					Eng:   eng,
+					Sched: sched,
+					Cfg:   cfg.Vacation,
+					Log:   log,
+				}
+				vacMon.Init()
+				go runVacationMonitor(ctx, vacInterval, vacMon, store, log)
 			}
 
 			mon := monitor.New(monitor.Config{
@@ -189,6 +218,16 @@ func daemonCmd() *cobra.Command {
 							// (e.g., keep water heater off during peak hours)
 							if sched != nil {
 								sched.ReapplyActive(ctx)
+							}
+							// If vacation mode is active, reapply vacation curtailment
+							// (e.g., keep water heater off while away)
+							if vacMon != nil {
+								if v, _ := store.Get("ecobee.vacation_active"); v == "true" {
+									log.Info("reapplying vacation curtailment after grid restore")
+									if err := eng.RunRecipe(ctx, "vacation-curtail", cfg.Vacation.Curtail); err != nil {
+										log.Error("vacation curtail reapply failed", "error", err)
+									}
+								}
 							}
 						}()
 					}
@@ -380,6 +419,39 @@ func ecobeeAuthCmd() *cobra.Command {
 			signalDaemon(syscall.SIGUSR1)
 			return nil
 		},
+	}
+}
+
+// runVacationMonitor periodically checks Ecobee vacation status and
+// curtails/restores the water heater on transitions.
+func runVacationMonitor(ctx context.Context, interval time.Duration, vacMon *curtailment.VacationMonitor, store *state.Store, log *slog.Logger) {
+	log.Info("vacation monitor starting", "interval", interval)
+
+	timer := time.NewTimer(interval) // first check after one interval (keepalive fires immediately)
+	defer timer.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			log.Info("vacation monitor stopped")
+			return
+		case <-timer.C:
+			// Read current thermostat state (sets ecobee.vacation_active in store)
+			readMode, err := actions.Get("ecobee.read_mode")
+			if err != nil {
+				log.Error("vacation monitor: ecobee.read_mode not registered", "error", err)
+				timer.Reset(interval)
+				continue
+			}
+			if err := readMode.Execute(ctx, nil, store); err != nil {
+				log.Warn("vacation monitor: failed to read thermostat", "error", err)
+				timer.Reset(interval)
+				continue
+			}
+
+			vacMon.HandleTransition(ctx)
+			timer.Reset(interval)
+		}
 	}
 }
 
