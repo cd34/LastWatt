@@ -59,12 +59,13 @@ type VacationConfig struct {
 }
 
 type Schedule struct {
-	Name    string       `yaml:"name"`
-	Days    []string     `yaml:"days"`
-	Start   string       `yaml:"start"`
-	Stop    string       `yaml:"stop"`
-	Actions []ActionStep `yaml:"actions"`
-	Restore []ActionStep `yaml:"restore"`
+	Name    string        `yaml:"name"`
+	Days    []string      `yaml:"days"`
+	Start   string        `yaml:"start"`
+	Stop    string        `yaml:"stop"`
+	Jitter  time.Duration `yaml:"jitter,omitempty"` // random offset +/- this duration
+	Actions []ActionStep  `yaml:"actions"`
+	Restore []ActionStep  `yaml:"restore"`
 }
 
 type LocationConfig struct {

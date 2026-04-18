@@ -119,11 +119,15 @@ vacation:
 
 # --- Custom schedules (optional) ---
 # For anything the rates section doesn't cover.
+# jitter adds a random offset of +/- the specified duration to the start
+# time, recomputed each day.  Useful so that all devices on the same
+# schedule don't switch simultaneously.
 # schedules:
 #   - name: evening_lights
 #     days: [Mon, Tue, Wed, Thu, Fri]
 #     start: "22:00"
 #     stop: "06:00"
+#     jitter: 10m              # start anywhere from 21:50 to 22:10
 #     actions:
 #       - action: shelly.set
 #         params: { host: 192.168.1.X, state: off, label: porch_light }

@@ -287,6 +287,79 @@ func TestSchedule_ReapplyAfterGridRestore(t *testing.T) {
 	}
 }
 
+// --- Jitter tests ---
+
+func TestSchedule_Jitter_OffsetsStartTime(t *testing.T) {
+	now := testNow()
+	// Create a schedule that starts exactly at now — without jitter it enters immediately
+	day := now.Weekday().String()[:3]
+	sched, store, curtailAct, _ := newTestSched(t, now, []config.Schedule{{
+		Name:    "test",
+		Days:    []string{day},
+		Start:   now.Format("15:04"),
+		Stop:    now.Add(1 * time.Hour).Format("15:04"),
+		Jitter:  15 * time.Minute,
+		Actions: []config.ActionStep{{Action: "test.curtail"}},
+		Restore: []config.ActionStep{{Action: "test.restore"}},
+	}})
+	_ = store
+	ctx := context.Background()
+
+	// Force jitter to be computed
+	sched.evaluate(ctx)
+
+	// The jitter was computed — verify it's within range
+	j := sched.jitter["test"]
+	if j < -15*time.Minute || j > 15*time.Minute {
+		t.Fatalf("jitter %v out of range [-15m, +15m]", j)
+	}
+
+	// If jitter is positive, the start shifts later so the schedule hasn't entered yet
+	// If jitter is negative, start shifts earlier so it entered
+	if j > 0 {
+		if curtailAct.callCount() != 0 {
+			t.Logf("jitter=%v (positive), schedule should not have entered yet", j)
+			t.Fatal("curtail should not run with positive jitter")
+		}
+	}
+	// We can't assert the negative case deterministically, just verify no crash
+}
+
+func TestSchedule_Jitter_RecomputesDaily(t *testing.T) {
+	now := testNow()
+	day := now.Weekday().String()[:3]
+	sched, _, _, _ := newTestSched(t, now, []config.Schedule{{
+		Name:    "test",
+		Days:    []string{day},
+		Start:   now.Add(-30 * time.Minute).Format("15:04"),
+		Stop:    now.Add(1 * time.Hour).Format("15:04"),
+		Jitter:  5 * time.Minute,
+		Actions: []config.ActionStep{{Action: "test.curtail"}},
+		Restore: []config.ActionStep{{Action: "test.restore"}},
+	}})
+	ctx := context.Background()
+
+	sched.evaluate(ctx)
+	firstJitter := sched.jitter["test"]
+	firstDay := sched.jitterDay
+
+	// Same day — jitter should not recompute
+	sched.evaluate(ctx)
+	if sched.jitter["test"] != firstJitter {
+		t.Fatal("jitter should not change within the same day")
+	}
+
+	// Advance to next day
+	tomorrow := now.Add(24 * time.Hour)
+	sched.now = func() time.Time { return tomorrow }
+	sched.evaluate(ctx)
+
+	if sched.jitterDay == firstDay {
+		t.Fatal("jitter day should have advanced")
+	}
+	// New jitter may or may not differ (random), but it was recomputed
+}
+
 // --- Flow override tests ---
 
 func TestSchedule_FlowOverride_RestoresDuringSchedule(t *testing.T) {
