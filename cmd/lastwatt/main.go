@@ -25,6 +25,7 @@ import (
 	"github.com/mcd/lastwatt/internal/monitor"
 	"github.com/mcd/lastwatt/internal/scheduler"
 	"github.com/mcd/lastwatt/internal/state"
+	"github.com/mcd/lastwatt/internal/trigger"
 )
 
 var (
@@ -125,6 +126,7 @@ func daemonCmd() *cobra.Command {
 
 			// Start Tempest weather listener in background
 			tl := tempest.GetListener(log)
+			tl.SetStore(store)
 			go func() {
 				if err := tl.Run(ctx); err != nil {
 					log.Error("tempest listener error", "error", err)
@@ -227,11 +229,31 @@ func daemonCmd() *cobra.Command {
 				go runVacationMonitor(ctx, vacInterval, vacMon, store, log)
 			}
 
+			// Start trigger runner if configured
+			var trigRunner *trigger.Runner
+			if len(cfg.Triggers) > 0 {
+				holds := &holdChecker{store: store, sched: sched}
+				for _, tc := range cfg.Triggers {
+					if err := eng.ValidateRecipe("trigger:"+tc.Name, tc.Start); err != nil {
+						return fmt.Errorf("invalid trigger %q start recipe: %w", tc.Name, err)
+					}
+					if err := eng.ValidateRecipe("trigger-stop:"+tc.Name, tc.Stop); err != nil {
+						return fmt.Errorf("invalid trigger %q stop recipe: %w", tc.Name, err)
+					}
+				}
+				var err error
+				trigRunner, err = trigger.New(cfg.Triggers, eng, store, holds, log)
+				if err != nil {
+					return fmt.Errorf("invalid trigger config: %w", err)
+				}
+				go trigRunner.Run(ctx)
+			}
+
 			mon := monitor.New(monitor.Config{
-				Host:             cfg.Monitor.Host,
-				Interval:         cfg.Monitor.Interval,
-				FailThreshold:    cfg.Monitor.FailThreshold,
-				RecoverThreshold: cfg.Monitor.RecoverThreshold,
+				Host:             cfg.Grid.Monitor.Host,
+				Interval:         cfg.Grid.Monitor.Interval,
+				FailThreshold:    cfg.Grid.Monitor.FailThreshold,
+				RecoverThreshold: cfg.Grid.Monitor.RecoverThreshold,
 				Log:              log,
 				OnPing: func(ok bool) {
 					if ok {
@@ -265,7 +287,6 @@ func daemonCmd() *cobra.Command {
 								sched.ReapplyActive(ctx)
 							}
 							// If vacation mode is active, reapply vacation curtailment
-							// (e.g., keep water heater off while away)
 							if vacMon != nil {
 								if v, _ := store.Get("ecobee.vacation_active"); v == "true" {
 									log.Info("reapplying vacation curtailment after grid restore")
@@ -273,6 +294,10 @@ func daemonCmd() *cobra.Command {
 										log.Error("vacation curtail reapply failed", "error", err)
 									}
 								}
+							}
+							// Reapply any active triggers
+							if trigRunner != nil {
+								trigRunner.ReapplyActive(ctx)
 							}
 						}()
 					}
@@ -498,6 +523,25 @@ func runVacationMonitor(ctx context.Context, interval time.Duration, vacMon *cur
 			timer.Reset(interval)
 		}
 	}
+}
+
+// holdChecker implements trigger.HoldChecker.
+type holdChecker struct {
+	store *state.Store
+	sched *scheduler.Scheduler
+}
+
+func (h *holdChecker) GridCurtailed() bool {
+	return h.store.GetStatus() == state.StatusCurtailed
+}
+
+func (h *holdChecker) ScheduleActive() bool {
+	return h.sched != nil && h.sched.ActiveSchedule() != ""
+}
+
+func (h *holdChecker) VacationActive() bool {
+	v, _ := h.store.Get("ecobee.vacation_active")
+	return v == "true"
 }
 
 // signalDaemon sends a signal to any running lastwatt daemon process.

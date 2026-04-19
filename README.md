@@ -102,6 +102,29 @@ vacation:
       params: { pin: "17", state: on, label: water_heater }
 ```
 
+### Triggers
+
+Condition-based rules that watch store values and fire `start`/`stop` actions on transitions. All conditions in `when` must be true (AND). Evaluated every 30 seconds.
+
+```yaml
+triggers:
+  - name: heat_warning
+    when:
+      - "tempest.temp_f > 90"
+      - "ecobee.saved_mode == heat"
+    start:
+      - action: gpio.set
+        params: { pin: "22", state: on, label: heat_warning_led }
+    stop:
+      - action: gpio.set
+        params: { pin: "22", state: off, label: heat_warning_led }
+    respect_holds: false     # run stop even if grid/schedule/vacation hold active
+```
+
+Operators: `==`, `!=`, `>`, `<`, `>=`, `<=`. Numeric values are compared numerically; strings are compared lexicographically. If a store key doesn't exist yet, the condition evaluates to false.
+
+Available store keys include `tempest.temp_f`, `tempest.humidity`, `tempest.wind_mph`, `tempest.solar_rad`, `ecobee.saved_mode`, `ecobee.vacation_active`, `flow.flowing`, `flow.rate`, `schedule.active`, and `trigger.<name>`.
+
 ### Interaction Matrix
 
 `flow_override` is set per action step, not per mode. Only the specific devices marked with `flow_override: true` respond to flow detection -- other curtailed devices stay off. This lets you curtail a water heater and a pool pump during peak hours, but only restore the water heater when someone turns on a faucet.
@@ -136,10 +159,15 @@ lastwatt forecast            # show NWS hourly forecast
 
 ## Config
 
-See [config.yaml.sample](config.yaml.sample) for a full example with comments. All three curtailment modes use `start`/`stop` action lists:
+See [config.yaml.sample](config.yaml.sample) for a full example with comments. The grid monitor config lives under `grid:`. All modes use `start`/`stop` action lists:
 
 ```yaml
 grid:
+  monitor:
+    host: 192.168.1.X
+    interval: 5s
+    fail_threshold: 3
+    recover_threshold: 2
   start:
     - action: gpio.set
       params: { pin: "17", state: off, label: water_heater }
