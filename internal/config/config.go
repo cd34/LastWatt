@@ -9,23 +9,32 @@ import (
 )
 
 type Config struct {
-	Monitor   MonitorConfig  `yaml:"monitor"`
-	Location  LocationConfig `yaml:"location"`
-	StateFile string         `yaml:"state_file"`
+	Location  LocationConfig   `yaml:"location"`
+	StateFile string           `yaml:"state_file"`
 	Grid      GridConfig       `yaml:"grid"`
 	Rates     RatesConfig      `yaml:"rates,omitempty"`
 	Vacation  VacationConfig   `yaml:"vacation,omitempty"`
 	FlowMeter *FlowMeterConfig `yaml:"flow_meter,omitempty"`
-	Schedules []Schedule     `yaml:"schedules,omitempty"`
-	Overrides []OverrideRule `yaml:"overrides,omitempty"`
+	Schedules []Schedule       `yaml:"schedules,omitempty"`
+	Triggers  []TriggerConfig  `yaml:"triggers,omitempty"`
 
 	ratesLocation *time.Location // parsed from Rates.Timezone
 }
 
-// GridConfig defines actions to run on grid power loss and recovery.
+// GridConfig defines the grid monitor and actions to run on power loss/recovery.
 type GridConfig struct {
-	Start []ActionStep `yaml:"start"` // actions to run when grid goes down
-	Stop  []ActionStep `yaml:"stop"`  // actions to run when grid comes back
+	Monitor MonitorConfig `yaml:"monitor"`
+	Start   []ActionStep  `yaml:"start"` // actions to run when grid goes down
+	Stop    []ActionStep  `yaml:"stop"`  // actions to run when grid comes back
+}
+
+// TriggerConfig defines a condition-based trigger that watches store values.
+type TriggerConfig struct {
+	Name         string       `yaml:"name"`
+	When         []string     `yaml:"when"`                    // conditions: "key op value"
+	Start        []ActionStep `yaml:"start"`                   // actions when conditions met
+	Stop         []ActionStep `yaml:"stop"`                    // actions when conditions clear
+	RespectHolds *bool        `yaml:"respect_holds,omitempty"` // default true; skip stop if hold active
 }
 
 // RatesLocation returns the parsed timezone for rate schedules, or local time.
@@ -122,12 +131,6 @@ func FlowOverridePair(start, stop []ActionStep) (startSteps, stopSteps []ActionS
 	return FlowOverrideSteps(start), FlowOverrideSteps(stop)
 }
 
-type OverrideRule struct {
-	Trigger    string        `yaml:"trigger"`
-	Actions    []ActionStep  `yaml:"actions"`
-	RevertAfter time.Duration `yaml:"revert_after,omitempty"`
-}
-
 // RateSchedules converts the rates config into scheduler-compatible schedules.
 func (r RatesConfig) RateSchedules() []Schedule {
 	if r.Peak == nil && r.MidPeak == nil {
@@ -176,21 +179,22 @@ func Load(path string) (*Config, error) {
 	}
 
 	cfg := &Config{
-		// Defaults
-		Monitor: MonitorConfig{
-			Interval:         5 * time.Second,
-			FailThreshold:    3,
-			RecoverThreshold: 2,
-		},
 		StateFile: "/var/lib/lastwatt/state.json",
+		Grid: GridConfig{
+			Monitor: MonitorConfig{
+				Interval:         5 * time.Second,
+				FailThreshold:    3,
+				RecoverThreshold: 2,
+			},
+		},
 	}
 
 	if err := yaml.Unmarshal(data, cfg); err != nil {
 		return nil, fmt.Errorf("parsing config: %w", err)
 	}
 
-	if cfg.Monitor.Host == "" {
-		return nil, fmt.Errorf("monitor.host is required")
+	if cfg.Grid.Monitor.Host == "" {
+		return nil, fmt.Errorf("grid.monitor.host is required")
 	}
 
 	// Merge rate-based schedules into the schedules list

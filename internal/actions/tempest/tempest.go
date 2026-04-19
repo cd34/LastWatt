@@ -58,6 +58,12 @@ type Listener struct {
 	mu     sync.RWMutex
 	latest *Observation
 	log    *slog.Logger
+	store  actions.StateStore
+}
+
+// SetStore configures a state store for the listener to update on each observation.
+func (l *Listener) SetStore(store actions.StateStore) {
+	l.store = store
 }
 
 // global singleton — started once, shared by actions and the daemon
@@ -158,6 +164,15 @@ func (l *Listener) handleMessage(data []byte) {
 	l.mu.Lock()
 	l.latest = o
 	l.mu.Unlock()
+
+	if l.store != nil {
+		l.store.Set("tempest.temp_f", fmt.Sprintf("%.1f", o.TempF))
+		l.store.Set("tempest.temp_c", fmt.Sprintf("%.1f", o.TempC))
+		l.store.Set("tempest.humidity", fmt.Sprintf("%.0f", o.Humidity))
+		l.store.Set("tempest.wind_mph", fmt.Sprintf("%.1f", o.WindAvgMPS*2.237))
+		l.store.Set("tempest.solar_rad", fmt.Sprintf("%.0f", o.SolarRad))
+		l.store.Set("tempest.battery", fmt.Sprintf("%.2f", o.Battery))
+	}
 
 	l.log.Debug("tempest observation",
 		"temp_f", fmt.Sprintf("%.1f", o.TempF),

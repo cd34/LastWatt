@@ -111,8 +111,9 @@ func TestRateSchedules_MidPeakOnly(t *testing.T) {
 
 func TestLoad_RatesTimezone(t *testing.T) {
 	yaml := `
-monitor:
-  host: 192.168.1.1
+grid:
+  monitor:
+    host: 192.168.1.1
 rates:
   timezone: America/Denver
   weekends_offpeak: true
@@ -144,8 +145,9 @@ rates:
 
 func TestLoad_RatesInvalidTimezone(t *testing.T) {
 	yaml := `
-monitor:
-  host: 192.168.1.1
+grid:
+  monitor:
+    host: 192.168.1.1
 rates:
   timezone: Not/ATimezone
   peak:

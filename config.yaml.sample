@@ -1,9 +1,3 @@
-monitor:
-  host: 192.168.1.X        # device on grid power — goes offline when grid is down
-  interval: 5s
-  fail_threshold: 3        # consecutive ping failures before "curtailed"
-  recover_threshold: 2     # consecutive ping successes before "normal"
-
 location:
   lat: 0.0000              # your latitude
   lon: 0.0000              # your longitude
@@ -13,7 +7,7 @@ state_file: /var/lib/lastwatt/state.json
 
 # --- Flow meter ---
 # TUF-2000M ultrasonic flow meter via Modbus RTU.
-# Required for flow_override on action steps below.
+# Required for flow_override on action steps.
 # flow_meter:
 #   port: /dev/ttyUSB0
 #   baud: 9600
@@ -21,13 +15,19 @@ state_file: /var/lib/lastwatt/state.json
 #   interval: 5s
 
 # --- Grid power loss ---
-# start: actions run when the monitored device stops responding.
-# stop:  actions run when grid power returns.
+# monitor: pings a device on grid power to detect outages.
+# start:   actions run when grid goes down.
+# stop:    actions run when grid comes back.
 # Mark individual actions with flow_override: true to allow them to be
 # temporarily restored when water flow is detected.
 grid:
+  monitor:
+    host: 192.168.1.X      # device on grid power — goes offline when grid is down
+    interval: 5s
+    fail_threshold: 3       # consecutive ping failures before curtailed
+    recover_threshold: 2    # consecutive ping successes before normal
   start:
-    - action: ecobee.read_mode      # save current thermostat state
+    - action: ecobee.read_mode
     - action: ecobee.set_hold
       params:
         heat_temp: 55
@@ -37,7 +37,7 @@ grid:
         pin: "17"
         state: off
         label: water_heater
-      flow_override: true            # restore this device when flow detected
+      flow_override: true
     - action: gpio.set
       params:
         pin: "27"
@@ -55,7 +55,7 @@ grid:
         pin: "17"
         state: on
         label: water_heater
-      flow_override: true            # pairs with the start step above
+      flow_override: true
     - action: gpio.set
       params:
         pin: "27"
@@ -69,7 +69,6 @@ grid:
 
 # --- Time-of-use electricity rate windows ---
 # Generates mid-peak and peak schedules automatically.
-# Mark actions with flow_override: true to allow temporary restore on flow.
 rates:
   timezone: America/Denver     # MST/MDT — automatic DST handling
   weekends_offpeak: true       # skip rate curtailment on Sat/Sun
@@ -96,12 +95,8 @@ rates:
 
 # --- Vacation mode ---
 # Polls the Ecobee thermostat for vacation events.
-# start: actions when vacation detected.
-# stop:  actions when vacation ends (only if grid is up and no rate
-#        schedule is active).
-# Omit flow_override on steps — nobody is home so there is no reason
-# to heat water.  Add flow_override: true if someone is still present
-# (e.g., pet sitter, house guest).
+# Omit flow_override — nobody is home.  Add flow_override: true to
+# individual steps if someone is still present (pet sitter, house guest).
 vacation:
   poll_interval: 10m
   start:
@@ -117,8 +112,50 @@ vacation:
         state: on
         label: water_heater
 
+# --- Condition-based triggers ---
+# Each trigger watches store values and runs start/stop actions on
+# transitions.  Conditions are AND'd — all must be true to fire.
+# Operators: ==, !=, >, <, >=, <=
+# Available keys: tempest.temp_f, tempest.humidity, tempest.wind_mph,
+#   tempest.solar_rad, ecobee.saved_mode, ecobee.vacation_active,
+#   flow.flowing, flow.rate, schedule.active, trigger.<name>
+# respect_holds: true (default) skips stop if grid/schedule/vacation hold active.
+#                false runs stop regardless.
+# triggers:
+#   - name: heat_warning
+#     when:
+#       - "tempest.temp_f > 90"
+#       - "ecobee.saved_mode == heat"
+#     start:
+#       - action: gpio.set
+#         params: { pin: "22", state: on, label: heat_warning_led }
+#     stop:
+#       - action: gpio.set
+#         params: { pin: "22", state: off, label: heat_warning_led }
+#     respect_holds: false
+#
+#   - name: cold_warning
+#     when:
+#       - "tempest.temp_f < 32"
+#       - "ecobee.saved_mode == cool"
+#     start:
+#       - action: gpio.set
+#         params: { pin: "23", state: on, label: cold_warning_led }
+#     stop:
+#       - action: gpio.set
+#         params: { pin: "23", state: off, label: cold_warning_led }
+#     respect_holds: false
+#
+#   - name: window_open
+#     when:
+#       - "sensor.window == open"
+#     start:
+#       - action: ecobee.set_hold
+#         params: { heat_temp: 60, cool_temp: 80 }
+#     stop:
+#       - action: ecobee.resume
+
 # --- Custom schedules (optional) ---
-# For anything the rates section doesn't cover.
 # begin/end define the time window, start/stop define the actions.
 # jitter adds a random offset of +/- the specified duration to the begin
 # time, recomputed each day.
@@ -127,7 +164,7 @@ vacation:
 #     days: [Mon, Tue, Wed, Thu, Fri]
 #     begin: "22:00"
 #     end: "06:00"
-#     jitter: 10m              # begin anywhere from 21:50 to 22:10
+#     jitter: 10m
 #     start:
 #       - action: shelly.set
 #         params: { host: 192.168.1.X, state: off, label: porch_light }
