@@ -9,16 +9,29 @@ import (
 )
 
 type Config struct {
-	Location  LocationConfig   `yaml:"location"`
-	StateFile string           `yaml:"state_file"`
-	Grid      GridConfig       `yaml:"grid"`
-	Rates     RatesConfig      `yaml:"rates,omitempty"`
-	Vacation  VacationConfig   `yaml:"vacation,omitempty"`
-	FlowMeter *FlowMeterConfig `yaml:"flow_meter,omitempty"`
-	Schedules []Schedule       `yaml:"schedules,omitempty"`
-	Triggers  []TriggerConfig  `yaml:"triggers,omitempty"`
+	Location      LocationConfig   `yaml:"location"`
+	StateFile     string           `yaml:"state_file"`
+	Grid          GridConfig       `yaml:"grid"`
+	Rates         RatesConfig      `yaml:"rates,omitempty"`
+	Vacation      VacationConfig   `yaml:"vacation,omitempty"`
+	FlowMeter     *FlowMeterConfig `yaml:"flow_meter,omitempty"`
+	WindowSensors []WindowSensor   `yaml:"window_sensors,omitempty"`
+	Schedules     []Schedule       `yaml:"schedules,omitempty"`
+	Triggers      []TriggerConfig  `yaml:"triggers,omitempty"`
 
 	ratesLocation *time.Location // parsed from Rates.Timezone
+}
+
+// WindowSensor configures polling for a single Shelly-based door/window sensor.
+// "gen2" is the Shelly Plus RPC API (e.g. Shelly Plus i4 with a reed switch on
+// an input). The sensor reports state via sensor.<name> as "open" or "closed".
+type WindowSensor struct {
+	Name     string        `yaml:"name"`
+	Host     string        `yaml:"host"`            // ip or hostname (no scheme)
+	API      string        `yaml:"api,omitempty"`   // "gen2" (default); future: "gen1", "blu"
+	Input    int           `yaml:"input,omitempty"` // input index (Gen2 default 0)
+	Interval time.Duration `yaml:"interval,omitempty"`
+	Invert   bool          `yaml:"invert,omitempty"` // flip open/closed (e.g. NO reed switch)
 }
 
 // GridConfig defines the grid monitor and actions to run on power loss/recovery.
@@ -32,6 +45,7 @@ type GridConfig struct {
 type TriggerConfig struct {
 	Name         string       `yaml:"name"`
 	When         []string     `yaml:"when"`                    // conditions: "key op value"
+	Unless       []string     `yaml:"unless,omitempty"`        // suppress trigger when all of these are also true
 	Start        []ActionStep `yaml:"start"`                   // actions when conditions met
 	Stop         []ActionStep `yaml:"stop"`                    // actions when conditions clear
 	RespectHolds *bool        `yaml:"respect_holds,omitempty"` // default true; skip stop if hold active
@@ -195,6 +209,23 @@ func Load(path string) (*Config, error) {
 
 	if cfg.Grid.Monitor.Host == "" {
 		return nil, fmt.Errorf("grid.monitor.host is required")
+	}
+
+	for i, ws := range cfg.WindowSensors {
+		if ws.Name == "" {
+			return nil, fmt.Errorf("window_sensors[%d]: name is required", i)
+		}
+		if ws.Host == "" {
+			return nil, fmt.Errorf("window_sensors[%q]: host is required", ws.Name)
+		}
+		if ws.API == "" {
+			cfg.WindowSensors[i].API = "gen2"
+		} else if ws.API != "gen2" {
+			return nil, fmt.Errorf("window_sensors[%q]: api %q not supported (use \"gen2\")", ws.Name, ws.API)
+		}
+		if ws.Interval == 0 {
+			cfg.WindowSensors[i].Interval = 30 * time.Second
+		}
 	}
 
 	// Merge rate-based schedules into the schedules list

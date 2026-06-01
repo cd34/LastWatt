@@ -306,6 +306,83 @@ func TestTrigger_InvalidCondition(t *testing.T) {
 	}
 }
 
+func TestTrigger_UnlessSuppresses(t *testing.T) {
+	store := newTestStore(t)
+	eng := &recipeLog{}
+	holds := &stubHolds{}
+
+	runner, err := New([]config.TriggerConfig{{
+		Name:   "open_windows_cool",
+		When:   []string{"ecobee.saved_mode == cool", "ecobee.inside_temp > tempest.temp_f"},
+		Unless: []string{"sun.is_day == true"},
+		Start:  []config.ActionStep{{Action: "test.start"}},
+		Stop:   []config.ActionStep{{Action: "test.stop"}},
+	}}, eng, store, holds, testLog)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	store.Set("ecobee.saved_mode", "cool")
+	store.Set("ecobee.inside_temp", "75.0")
+	store.Set("tempest.temp_f", "65.0")
+	store.Set("sun.is_day", "true")
+
+	runner.Evaluate(context.Background())
+	if eng.has("trigger:open_windows_cool") {
+		t.Fatal("trigger should be suppressed by unless")
+	}
+
+	// Sun sets — suppression lifts, trigger fires.
+	store.Set("sun.is_day", "false")
+	runner.Evaluate(context.Background())
+	if !eng.has("trigger:open_windows_cool") {
+		t.Fatal("trigger should fire once unless clears")
+	}
+}
+
+func TestTrigger_UnlessClearsActiveTrigger(t *testing.T) {
+	// A trigger that is already active should be cleared (stop fires) when
+	// the unless conditions become true while when conditions still hold.
+	store := newTestStore(t)
+	eng := &recipeLog{}
+	holds := &stubHolds{}
+
+	runner, err := New([]config.TriggerConfig{{
+		Name:   "warn",
+		When:   []string{"a == 1"},
+		Unless: []string{"b == 1"},
+		Start:  []config.ActionStep{{Action: "test.start"}},
+		Stop:   []config.ActionStep{{Action: "test.stop"}},
+	}}, eng, store, holds, testLog)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	store.Set("a", "1")
+	runner.Evaluate(context.Background())
+	if !eng.has("trigger:warn") {
+		t.Fatal("trigger should fire when when holds and unless empty")
+	}
+
+	eng.reset()
+	store.Set("b", "1") // unless now true
+	runner.Evaluate(context.Background())
+	if !eng.has("trigger-stop:warn") {
+		t.Fatal("trigger should stop when unless becomes true")
+	}
+}
+
+func TestTrigger_InvalidUnless(t *testing.T) {
+	_, err := New([]config.TriggerConfig{{
+		Name:   "bad",
+		When:   []string{"a == 1"},
+		Unless: []string{"not a condition"},
+	}}, nil, nil, nil, testLog)
+	if err == nil {
+		t.Fatal("expected error for invalid unless condition")
+	}
+}
+
 func TestTrigger_EvaluationOrder(t *testing.T) {
 	store := newTestStore(t)
 	eng := &recipeLog{}

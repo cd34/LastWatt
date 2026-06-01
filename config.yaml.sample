@@ -112,13 +112,36 @@ vacation:
         state: on
         label: water_heater
 
+# --- Window/door sensors (optional) ---
+# Each entry polls a Shelly Gen2 device's input over HTTP RPC and writes
+# sensor.<name> = "open" or "closed" to the state store.  Typical wiring:
+# a magnetic reed switch from the window frame to one of a Shelly Plus i4's
+# inputs.  With a normally-closed reed (magnet present => circuit closed),
+# state=true means "closed" — set invert: true for normally-open switches.
+# window_sensors:
+#   - name: living
+#     host: 192.168.1.50
+#     api: gen2              # only gen2 supported today; blu coming later
+#     input: 0               # input channel on the Shelly device
+#     interval: 30s          # poll interval
+#     invert: false          # flip if reed switch is normally-open
+
 # --- Condition-based triggers ---
 # Each trigger watches store values and runs start/stop actions on
 # transitions.  Conditions are AND'd — all must be true to fire.
 # Operators: ==, !=, >, <, >=, <=
+# The right-hand side may be a literal (90, heat, true) or another store
+# key (e.g. "ecobee.inside_temp > tempest.temp_f").  A dotted identifier
+# is treated as a key reference; anything else is a literal.
 # Available keys: tempest.temp_f, tempest.humidity, tempest.wind_mph,
-#   tempest.solar_rad, ecobee.saved_mode, ecobee.vacation_active,
-#   flow.flowing, flow.rate, schedule.active, trigger.<name>
+#   tempest.solar_rad, ecobee.saved_mode, ecobee.inside_temp,
+#   ecobee.saved_heat, ecobee.saved_cool, ecobee.vacation_active,
+#   flow.flowing, flow.rate, schedule.active, trigger.<name>,
+#   sun.is_day, sun.elevation,
+#   forecast.next_hour_temp, forecast.temp_delta_1h,
+#   sensor.<name> (one per configured window_sensors entry)
+# unless: optional list of conditions that, when all true, suppress the
+#         trigger even if the when conditions are met.
 # respect_holds: true (default) skips stop if grid/schedule/vacation hold active.
 #                false runs stop regardless.
 # triggers:
@@ -146,12 +169,63 @@ vacation:
 #         params: { pin: "23", state: off, label: cold_warning_led }
 #     respect_holds: false
 #
-#   - name: window_open
+#   # Cooling is running but it's cooler outside than inside — opening a
+#   # window would do the job for free.  Light an LED to prompt action.
+#   # unless: it's daytime and the forecast says temp is climbing soon —
+#   # the AC will be needed anyway, no point opening windows.
+#   # The sensor.living gate prevents nagging about a window that's open.
+#   - name: open_windows_cool
 #     when:
-#       - "sensor.window == open"
+#       - "ecobee.saved_mode == cool"
+#       - "ecobee.inside_temp > tempest.temp_f"
+#       - "sensor.living == closed"
+#     unless:
+#       - "sun.is_day == true"
+#       - "forecast.temp_delta_1h > 2"
+#     start:
+#       - action: gpio.set
+#         params: { pin: "24", state: on, label: open_windows_led }
+#     stop:
+#       - action: gpio.set
+#         params: { pin: "24", state: off, label: open_windows_led }
+#     respect_holds: false
+#
+#   # Heating is running but it's warmer outside than inside — opening a
+#   # window would warm the house naturally.
+#   - name: open_windows_heat
+#     when:
+#       - "ecobee.saved_mode == heat"
+#       - "ecobee.inside_temp < tempest.temp_f"
+#       - "sensor.living == closed"
+#     start:
+#       - action: gpio.set
+#         params: { pin: "24", state: on, label: open_windows_led }
+#     stop:
+#       - action: gpio.set
+#         params: { pin: "24", state: off, label: open_windows_led }
+#     respect_holds: false
+#
+#   # Night fell and the heat is still trying to hit the daytime setpoint —
+#   # back the heat off (low hold) and let the house cool overnight.
+#   # Stop fires at sunrise: ecobee.resume returns to the regular schedule.
+#   - name: night_heat_off
+#     when:
+#       - "ecobee.saved_mode == heat"
+#       - "sun.is_day == false"
 #     start:
 #       - action: ecobee.set_hold
-#         params: { heat_temp: 60, cool_temp: 80 }
+#         params: { heat_temp: 55, cool_temp: 85 }
+#     stop:
+#       - action: ecobee.resume
+#
+#   # If a window is open, don't fight it: widen the deadband so the HVAC
+#   # essentially stops.  Resume on close.
+#   - name: window_open_curtail
+#     when:
+#       - "sensor.living == open"
+#     start:
+#       - action: ecobee.set_hold
+#         params: { heat_temp: 55, cool_temp: 90 }
 #     stop:
 #       - action: ecobee.resume
 
