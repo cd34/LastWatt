@@ -17,7 +17,9 @@ A grid curtailment daemon for Raspberry Pi. Monitors grid power by pinging a dev
 - **Shelly** relay control via local HTTP API
 - **Tempest weather station** integration (local UDP broadcast)
 - **Flow meter** -- TUF-2000M ultrasonic flow meter via Modbus RTU
-- **NWS hourly forecast** for weather-aware decision making
+- **NWS hourly forecast** for weather-aware decision making (publishes `forecast.next_hour_temp`, `forecast.temp_delta_1h`)
+- **Sun position** -- computes `sun.is_day` / `sun.elevation` from lat/lon, no API needed
+- **Window/door sensors** -- polls Shelly Gen2 inputs, publishes `sensor.<name>` as `open`/`closed`
 - **Schedule jitter** -- randomize start times to avoid simultaneous switching
 - **Startup grace period** -- won't false-curtail if Pi boots before the monitored device
 - **Debounced state writes** to reduce SD card wear
@@ -123,7 +125,29 @@ triggers:
 
 Operators: `==`, `!=`, `>`, `<`, `>=`, `<=`. Numeric values are compared numerically; strings are compared lexicographically. If a store key doesn't exist yet, the condition evaluates to false.
 
-Available store keys include `tempest.temp_f`, `tempest.humidity`, `tempest.wind_mph`, `tempest.solar_rad`, `ecobee.saved_mode`, `ecobee.vacation_active`, `flow.flowing`, `flow.rate`, `schedule.active`, and `trigger.<name>`.
+The right-hand side may be a literal (`90`, `heat`, `true`) or another store key. A dotted identifier (e.g. `tempest.temp_f`) is resolved from the store at evaluation time; anything else is a literal. This lets you compare two live values:
+
+```yaml
+- name: open_windows_cool
+  when:
+    - "ecobee.saved_mode == cool"
+    - "ecobee.inside_temp > tempest.temp_f"     # inside hotter than outside
+    - "sensor.living == closed"                  # don't nag if already open
+  unless:                                        # suppress when these all hold
+    - "sun.is_day == true"
+    - "forecast.temp_delta_1h > 2"               # AC will be needed anyway
+  start:
+    - action: gpio.set
+      params: { pin: "24", state: on, label: open_windows_led }
+  stop:
+    - action: gpio.set
+      params: { pin: "24", state: off, label: open_windows_led }
+  respect_holds: false
+```
+
+`unless:` is an optional list of conditions that, when all true, suppresses the trigger (already-active triggers transition to stop). Useful for "fire X except when Y" without expanding `when` with negations.
+
+Available store keys include `tempest.temp_f`, `tempest.humidity`, `tempest.wind_mph`, `tempest.solar_rad`, `ecobee.saved_mode`, `ecobee.inside_temp`, `ecobee.saved_heat`, `ecobee.saved_cool`, `ecobee.vacation_active`, `flow.flowing`, `flow.rate`, `schedule.active`, `trigger.<name>`, `sun.is_day`, `sun.elevation`, `forecast.next_hour_temp`, `forecast.temp_delta_1h`, and `sensor.<name>` (one per configured `window_sensors` entry).
 
 ### Interaction Matrix
 
@@ -206,6 +230,18 @@ flow_meter:
   interval: 5s
 ```
 
+`window_sensors` configures Shelly Gen2 input polling for wired reed-switch door/window sensors. Each entry publishes `sensor.<name>` = `open` or `closed` for triggers to consume:
+
+```yaml
+window_sensors:
+  - name: living
+    host: 192.168.1.50    # Shelly Plus i4 or similar Gen2 device
+    api: gen2              # only gen2 supported today
+    input: 0               # input channel
+    interval: 30s
+    invert: false          # flip if reed switch is normally-open
+```
+
 Custom schedules use `begin`/`end` for the time window and `start`/`stop` for actions:
 
 ```yaml
@@ -246,6 +282,7 @@ internal/
   engine/              Recipe executor
   scheduler/           Time-based schedule evaluation + flow override
   curtailment/         Coordination logic (ShouldRestore, vacation monitor)
+  trigger/             Condition-based trigger runner (when/unless)
   state/               JSON state persistence (debounced writes)
   actions/             Action interface + registry
     ecobee/            Ecobee thermostat (Auth0 web flow)
@@ -254,6 +291,8 @@ internal/
     tempest/           Tempest weather station (UDP)
     flow/              TUF-2000M flow meter (Modbus RTU)
   forecast/            NWS hourly forecast provider
+  sun/                 Solar position (sun.is_day from lat/lon)
+  sensors/             Window/door sensor pollers (Shelly Gen2)
 ```
 
 ## Data Sources
@@ -262,7 +301,9 @@ The daemon runs several background data feeds:
 
 - **Ping monitor** -- grid power status via ICMP to a device on grid power
 - **Tempest UDP listener** -- real-time outdoor temperature, humidity, wind, solar radiation
-- **NWS forecast** -- hourly forecast for the next 7 days
+- **NWS forecast** -- hourly forecast for the next 7 days, publishes next-hour temp and 1h delta
+- **Sun position** -- one-minute tick computing `sun.is_day` / `sun.elevation` from lat/lon
+- **Window sensor pollers** -- one goroutine per configured `window_sensors` entry, polling Shelly Gen2 inputs
 - **Flow meter** -- water flow rate via Modbus RTU (TUF-2000M)
 - **Ecobee keepalive** -- proactive OAuth re-authentication + vacation mode polling
 
@@ -273,6 +314,8 @@ The daemon runs several background data feeds:
 | Raspberry Pi | Runs the daemon, GPIO for relays/LEDs |
 | [Shelly 1 Mini Gen3](https://us.shelly.com/products/shelly-1-mini-gen3) | Network relay, switches contactor coil for water heater via local HTTP API |
 | [Shelly PM Mini Gen3](https://us.shelly.com/products/shelly-pm-mini-gen3) | Power monitoring without relay |
+| [Shelly Plus i4](https://us.shelly.com/products/shelly-plus-i4) | Wi-Fi input module, polled for wired reed-switch window/door sensors |
+| Magnetic reed switches | Wired window/door sensors, run to Shelly Plus i4 inputs |
 | 2-pole 30A/240V contactor (120V coil) | Switches water heater power (e.g., Packard C230B) |
 | [TUF-2000M ultrasonic flow meter](https://www.aliexpress.us/item/3256808444609453.html) | Clamp-on flow detection for flow_override via Modbus RTU |
 | [Olimex USB-RS485](https://www.digikey.com/en/products/detail/olimex-ltd/USB-RS485/21661988) | Connects Pi to TUF-2000M via Modbus RTU |

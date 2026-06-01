@@ -143,6 +143,63 @@ rates:
 	}
 }
 
+func TestLoad_WindowSensorsDefaults(t *testing.T) {
+	yaml := `
+grid:
+  monitor:
+    host: 192.168.1.1
+window_sensors:
+  - name: living
+    host: 192.168.1.50
+`
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	os.WriteFile(path, []byte(yaml), 0644)
+
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(cfg.WindowSensors) != 1 {
+		t.Fatalf("expected 1 window sensor, got %d", len(cfg.WindowSensors))
+	}
+	ws := cfg.WindowSensors[0]
+	if ws.API != "gen2" {
+		t.Errorf("expected api default 'gen2', got %q", ws.API)
+	}
+	if ws.Interval == 0 {
+		t.Errorf("expected non-zero default interval")
+	}
+}
+
+func TestLoad_WindowSensorsValidation(t *testing.T) {
+	cases := []struct {
+		name string
+		yaml string
+	}{
+		{
+			"missing name",
+			"grid:\n  monitor:\n    host: 1.1.1.1\nwindow_sensors:\n  - host: 1.2.3.4\n",
+		},
+		{
+			"missing host",
+			"grid:\n  monitor:\n    host: 1.1.1.1\nwindow_sensors:\n  - name: foo\n",
+		},
+		{
+			"unsupported api",
+			"grid:\n  monitor:\n    host: 1.1.1.1\nwindow_sensors:\n  - name: foo\n    host: 1.2.3.4\n    api: gen1\n",
+		},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "config.yaml")
+			os.WriteFile(path, []byte(c.yaml), 0644)
+			if _, err := Load(path); err == nil {
+				t.Fatal("expected error")
+			}
+		})
+	}
+}
+
 func TestLoad_RatesInvalidTimezone(t *testing.T) {
 	yaml := `
 grid:

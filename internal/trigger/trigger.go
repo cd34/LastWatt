@@ -32,6 +32,7 @@ type HoldChecker interface {
 type triggerState struct {
 	cfg        config.TriggerConfig
 	conditions []Condition
+	unless     []Condition
 	active     bool
 }
 
@@ -50,15 +51,15 @@ type Runner struct {
 func New(cfgs []config.TriggerConfig, eng RecipeRunner, store StateProvider, holds HoldChecker, log *slog.Logger) (*Runner, error) {
 	triggers := make([]triggerState, len(cfgs))
 	for i, cfg := range cfgs {
-		conds := make([]Condition, len(cfg.When))
-		for j, expr := range cfg.When {
-			c, err := ParseCondition(expr)
-			if err != nil {
-				return nil, fmt.Errorf("trigger %q condition %d: %w", cfg.Name, j+1, err)
-			}
-			conds[j] = c
+		conds, err := parseConditions(cfg.Name, "when", cfg.When)
+		if err != nil {
+			return nil, err
 		}
-		triggers[i] = triggerState{cfg: cfg, conditions: conds}
+		unless, err := parseConditions(cfg.Name, "unless", cfg.Unless)
+		if err != nil {
+			return nil, err
+		}
+		triggers[i] = triggerState{cfg: cfg, conditions: conds, unless: unless}
 	}
 	return &Runner{
 		triggers: triggers,
@@ -94,6 +95,9 @@ func (r *Runner) Evaluate(ctx context.Context) {
 	for i := range r.triggers {
 		t := &r.triggers[i]
 		met := EvaluateAll(t.conditions, r.store.Get)
+		if met && len(t.unless) > 0 && EvaluateAll(t.unless, r.store.Get) {
+			met = false
+		}
 
 		if met && !t.active {
 			t.active = true
@@ -130,6 +134,18 @@ func (r *Runner) ReapplyActive(ctx context.Context) {
 			}
 		}
 	}
+}
+
+func parseConditions(triggerName, kind string, exprs []string) ([]Condition, error) {
+	conds := make([]Condition, len(exprs))
+	for j, expr := range exprs {
+		c, err := ParseCondition(expr)
+		if err != nil {
+			return nil, fmt.Errorf("trigger %q %s condition %d: %w", triggerName, kind, j+1, err)
+		}
+		conds[j] = c
+	}
+	return conds, nil
 }
 
 func (r *Runner) shouldSkipStop(cfg config.TriggerConfig) bool {

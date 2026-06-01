@@ -11,6 +11,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/mcd/lastwatt/internal/actions"
 )
 
 const (
@@ -82,6 +84,7 @@ type Provider struct {
 	forecastURL string // cached from points lookup
 	log         *slog.Logger
 	client      *http.Client
+	store       actions.StateStore
 
 	mu      sync.RWMutex
 	current *Forecast
@@ -94,6 +97,12 @@ func NewProvider(lat, lon float64, log *slog.Logger) *Provider {
 		log: log,
 		client: &http.Client{Timeout: 30 * time.Second},
 	}
+}
+
+// SetStore configures a state store that receives forecast.* keys on each
+// successful fetch.
+func (p *Provider) SetStore(s actions.StateStore) {
+	p.store = s
 }
 
 // Latest returns the most recent forecast, or nil.
@@ -225,7 +234,21 @@ func (p *Provider) fetch(ctx context.Context) error {
 		)
 	}
 
+	p.writeStore(f)
 	return nil
+}
+
+// writeStore publishes forecast-derived keys for trigger conditions to use.
+// forecast.next_hour_temp is the upcoming hour's forecast value.
+// forecast.temp_delta_1h is the forecasted change from this hour to next.
+func (p *Provider) writeStore(f *Forecast) {
+	if p.store == nil || f == nil || len(f.Periods) == 0 {
+		return
+	}
+	p.store.Set("forecast.next_hour_temp", fmt.Sprintf("%d", f.Periods[0].TempF))
+	if len(f.Periods) >= 2 {
+		p.store.Set("forecast.temp_delta_1h", fmt.Sprintf("%d", f.Periods[1].TempF-f.Periods[0].TempF))
+	}
 }
 
 func (p *Provider) nwsGet(ctx context.Context, url string) ([]byte, error) {

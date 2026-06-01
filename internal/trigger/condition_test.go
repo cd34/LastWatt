@@ -178,3 +178,80 @@ func TestEvaluateAll_MissingKey(t *testing.T) {
 		t.Error("expected false when key missing")
 	}
 }
+
+func TestParseCondition_RHSIsStoreKey(t *testing.T) {
+	tests := []struct {
+		expr       string
+		wantKey    string
+		wantOp     Op
+		wantVal    string
+		wantIsKey  bool
+	}{
+		{"ecobee.inside_temp > tempest.temp_f", "ecobee.inside_temp", OpGt, "tempest.temp_f", true},
+		{"ecobee.inside_temp < tempest.temp_f", "ecobee.inside_temp", OpLt, "tempest.temp_f", true},
+		{"sensor.a == sensor.b", "sensor.a", OpEq, "sensor.b", true},
+		// Numeric RHS is still a literal even if it has a decimal point
+		{"tempest.temp_f > 90.5", "tempest.temp_f", OpGt, "90.5", false},
+		// Plain word (no dot) remains a literal
+		{"ecobee.saved_mode == heat", "ecobee.saved_mode", OpEq, "heat", false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.expr, func(t *testing.T) {
+			c, err := ParseCondition(tt.expr)
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if c.Key != tt.wantKey || c.Op != tt.wantOp || c.Value != tt.wantVal {
+				t.Errorf("got {%q %d %q}, want {%q %d %q}",
+					c.Key, c.Op, c.Value, tt.wantKey, tt.wantOp, tt.wantVal)
+			}
+			if c.ValueIsKey != tt.wantIsKey {
+				t.Errorf("ValueIsKey = %v, want %v", c.ValueIsKey, tt.wantIsKey)
+			}
+		})
+	}
+}
+
+func TestEvaluateWith_KeyVsKey(t *testing.T) {
+	store := map[string]string{
+		"ecobee.inside_temp": "72.0",
+		"tempest.temp_f":     "65.0",
+	}
+	getter := func(k string) (string, bool) {
+		v, ok := store[k]
+		return v, ok
+	}
+
+	// inside > outside  ->  true
+	c, err := ParseCondition("ecobee.inside_temp > tempest.temp_f")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !c.EvaluateWith(getter) {
+		t.Error("expected 72 > 65 to be true")
+	}
+
+	// inside < outside  ->  false
+	c, err = ParseCondition("ecobee.inside_temp < tempest.temp_f")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.EvaluateWith(getter) {
+		t.Error("expected 72 < 65 to be false")
+	}
+}
+
+func TestEvaluateWith_RHSKeyMissing(t *testing.T) {
+	store := map[string]string{"ecobee.inside_temp": "72.0"}
+	getter := func(k string) (string, bool) {
+		v, ok := store[k]
+		return v, ok
+	}
+	c, err := ParseCondition("ecobee.inside_temp > tempest.temp_f")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.EvaluateWith(getter) {
+		t.Error("expected false when RHS key is missing from store")
+	}
+}

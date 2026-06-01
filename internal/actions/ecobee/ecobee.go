@@ -523,6 +523,7 @@ func (a *readModeAction) Execute(ctx context.Context, params map[string]any, sto
 	store.Set("ecobee.saved_mode", t.Settings.HvacMode)
 	store.Set("ecobee.saved_heat", fmt.Sprintf("%d", t.Runtime.DesiredHeat))
 	store.Set("ecobee.saved_cool", fmt.Sprintf("%d", t.Runtime.DesiredCool))
+	store.Set("ecobee.inside_temp", fmt.Sprintf("%.1f", float64(t.Runtime.ActualTemperature)/10))
 
 	vacation := false
 	for _, ev := range t.Events {

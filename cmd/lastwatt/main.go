@@ -24,7 +24,9 @@ import (
 	"github.com/mcd/lastwatt/internal/forecast"
 	"github.com/mcd/lastwatt/internal/monitor"
 	"github.com/mcd/lastwatt/internal/scheduler"
+	"github.com/mcd/lastwatt/internal/sensors"
 	"github.com/mcd/lastwatt/internal/state"
+	"github.com/mcd/lastwatt/internal/sun"
 	"github.com/mcd/lastwatt/internal/trigger"
 )
 
@@ -140,9 +142,18 @@ func daemonCmd() *cobra.Command {
 					interval = 30 * time.Minute
 				}
 				fp := forecast.NewProvider(cfg.Location.Lat, cfg.Location.Lon, log)
+				fp.SetStore(store)
 				go func() {
 					if err := fp.Run(ctx, interval); err != nil {
 						log.Error("forecast provider error", "error", err)
+					}
+				}()
+
+				// Start sun provider — writes sun.is_day from lat/lon
+				sp := sun.NewProvider(cfg.Location.Lat, cfg.Location.Lon, store, log)
+				go func() {
+					if err := sp.Run(ctx); err != nil {
+						log.Error("sun provider error", "error", err)
 					}
 				}()
 			}
@@ -162,6 +173,16 @@ func daemonCmd() *cobra.Command {
 				go func() {
 					if err := fl.Run(ctx, interval); err != nil {
 						log.Error("flow listener error", "error", err)
+					}
+				}()
+			}
+
+			// Start a poller per configured window sensor
+			for _, ws := range cfg.WindowSensors {
+				poller := sensors.NewWindowPoller(ws, store, log)
+				go func() {
+					if err := poller.Run(ctx); err != nil {
+						log.Error("window sensor poller error", "name", ws.Name, "error", err)
 					}
 				}()
 			}
