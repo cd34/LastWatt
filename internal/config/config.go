@@ -1,6 +1,7 @@
 package config
 
 import (
+	"bytes"
 	"fmt"
 	"os"
 	"time"
@@ -106,10 +107,10 @@ type MonitorConfig struct {
 
 // FlowMeterConfig defines the connection to a TUF-2000M flow meter.
 type FlowMeterConfig struct {
-	Port     string        `yaml:"port"`      // serial port (default /dev/ttyUSB0)
-	Baud     int           `yaml:"baud"`      // baud rate (default 9600)
-	SlaveID  int           `yaml:"slave_id"`  // Modbus slave address (default 1)
-	Interval time.Duration `yaml:"interval"`  // poll interval (default 5s)
+	Port     string        `yaml:"port"`     // serial port (default /dev/ttyUSB0)
+	Baud     int           `yaml:"baud"`     // baud rate (default 9600)
+	SlaveID  int           `yaml:"slave_id"` // Modbus slave address (default 1)
+	Interval time.Duration `yaml:"interval"` // poll interval (default 5s)
 }
 
 type ActionStep struct {
@@ -203,7 +204,12 @@ func Load(path string) (*Config, error) {
 		},
 	}
 
-	if err := yaml.Unmarshal(data, cfg); err != nil {
+	// Strict decoding: unknown/renamed keys (e.g. a stale top-level "monitor:"
+	// or "curtail:" from an older schema) become explicit errors instead of
+	// being silently ignored.
+	dec := yaml.NewDecoder(bytes.NewReader(data))
+	dec.KnownFields(true)
+	if err := dec.Decode(cfg); err != nil {
 		return nil, fmt.Errorf("parsing config: %w", err)
 	}
 

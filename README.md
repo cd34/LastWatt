@@ -322,6 +322,26 @@ The daemon runs several background data feeds:
 | [Ecobee thermostat](https://www.ecobee.com/) | Temperature holds during curtailment, vacation mode detection |
 | [WeatherFlow Tempest](https://weatherflow.com/tempest-weather-system/) | Outdoor weather data via local UDP |
 
+## Helpful Hints
+
+**Recovering the Ecobee TOTP secret.** Ecobee auth logs into the consumer
+account through Auth0 and handles 2FA itself: `ecobee-auth` prompts for a base32
+TOTP secret and stores it as `ecobee.totp_secret` so the daemon can generate MFA
+codes on its own. That secret lives only in the state file
+(`/var/lib/lastwatt/state.json`, alongside the username/password, plaintext,
+mode 0600) — if the file is wiped or truncated, ecobee auth breaks and must be
+re-established. To get the secret back: in 1Password, edit the Ecobee entry and
+click the one-time-password field — it reveals the underlying base32 setup key
+(not just the current 6-digit code). Paste that at the `ecobee-auth` prompt.
+
+**Disable Wi-Fi roaming on the Pi.** A Raspberry Pi running LastWatt over Wi-Fi
+(rather than Ethernet) should have roaming turned off. Roaming lets the Pi hop
+between APs/bands, causing brief drops — which matters here because the daemon
+pings a grid-power device every 5s and controls network Shellies over HTTP.
+Spurious disconnects can look like grid loss (false curtailment) or break action
+delivery (`shelly.set` → "no route to host"). Pin to a single BSSID and disable
+background scanning in your `wpa_supplicant`/NetworkManager config.
+
 ## License
 
 MIT
