@@ -7,6 +7,9 @@ Wants=network-online.target
 Type=simple
 ExecStart=/home/mcd/lastwatt/lastwatt daemon --config /home/mcd/lastwatt/config.yaml
 Restart=always
+# Don't restart on EX_CONFIG (78) — a bad config won't fix itself by retrying;
+# the daemon exits 78 on config errors so the unit fails cleanly instead of looping.
+RestartPreventExitStatus=78
 RestartSec=10
 User=mcd
 Group=mcd
