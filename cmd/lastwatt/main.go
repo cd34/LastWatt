@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"os"
@@ -39,12 +40,16 @@ func main() {
 	root := &cobra.Command{
 		Use:   "lastwatt",
 		Short: "Grid curtailment daemon for Raspberry Pi",
+		// Don't dump the usage block on a runtime/config error — it just buries
+		// the actual error in the journal. (Flag-parse errors still show usage.)
+		SilenceUsage: true,
 	}
 
 	root.PersistentFlags().StringVarP(&cfgFile, "config", "c", "config.yaml", "config file path")
 	root.PersistentFlags().StringVar(&logLevel, "log-level", "info", "log level (debug, info, warn, error)")
 
 	root.AddCommand(daemonCmd())
+	root.AddCommand(validateCmd())
 	root.AddCommand(statusCmd())
 	root.AddCommand(runCmd())
 	root.AddCommand(actionCmd())
@@ -52,7 +57,92 @@ func main() {
 	root.AddCommand(forecastCmd())
 
 	if err := root.Execute(); err != nil {
+		// Config errors are permanent — restarting won't fix them. Exit with
+		// EX_CONFIG (78) so systemd's RestartPreventExitStatus can stop the
+		// crashloop and leave the unit cleanly "failed" with the error logged.
+		var ce configError
+		if errors.As(err, &ce) {
+			os.Exit(exitConfigError)
+		}
 		os.Exit(1)
+	}
+}
+
+// exitConfigError is the sysexits.h EX_CONFIG code. Paired with
+// RestartPreventExitStatus=78 in the systemd unit.
+const exitConfigError = 78
+
+// configError marks an error as a configuration problem (bad YAML, failed
+// recipe validation, etc.) that will not be resolved by restarting.
+type configError struct{ err error }
+
+func (e configError) Error() string { return e.err.Error() }
+func (e configError) Unwrap() error { return e.err }
+
+// validateConfig runs every semantic check the daemon performs at startup and
+// returns all problems found (not just the first). A nil/empty slice means the
+// config is fully valid.
+func validateConfig(cfg *config.Config, eng *engine.Engine, store *state.Store, log *slog.Logger) []error {
+	var errs []error
+	check := func(name string, steps []config.ActionStep) {
+		if err := eng.ValidateRecipe(name, steps); err != nil {
+			errs = append(errs, err)
+		}
+	}
+
+	check("grid.start", cfg.Grid.Start)
+	check("grid.stop", cfg.Grid.Stop)
+	check("rates.start", cfg.Rates.Start)
+	check("rates.stop", cfg.Rates.Stop)
+	check("vacation.start", cfg.Vacation.Start)
+	check("vacation.stop", cfg.Vacation.Stop)
+
+	for _, s := range cfg.Schedules {
+		check("schedule:"+s.Name+".start", s.Start)
+		check("schedule:"+s.Name+".stop", s.Stop)
+	}
+	for _, tc := range cfg.Triggers {
+		check("trigger:"+tc.Name+".start", tc.Start)
+		check("trigger:"+tc.Name+".stop", tc.Stop)
+	}
+
+	// Parse trigger conditions (when/unless expressions) by constructing a runner.
+	if len(cfg.Triggers) > 0 {
+		holds := &holdChecker{store: store}
+		if _, err := trigger.New(cfg.Triggers, eng, store, holds, log); err != nil {
+			errs = append(errs, fmt.Errorf("trigger conditions: %w", err))
+		}
+	}
+
+	return errs
+}
+
+func validateCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:   "validate",
+		Short: "Validate the config file and report all problems",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			log := newLogger()
+			cfg, err := config.Load(cfgFile)
+			if err != nil {
+				return configError{err}
+			}
+			store, err := state.New(cfg.StateFile)
+			if err != nil {
+				return err
+			}
+			eng := engine.New(store, log)
+
+			if errs := validateConfig(cfg, eng, store, log); len(errs) > 0 {
+				fmt.Fprintf(os.Stderr, "config invalid (%d problem(s)):\n", len(errs))
+				for _, e := range errs {
+					fmt.Fprintf(os.Stderr, "  - %v\n", e)
+				}
+				return configError{errors.New("validation failed")}
+			}
+			fmt.Printf("config OK: %s\n", cfgFile)
+			return nil
+		},
 	}
 }
 
@@ -91,17 +181,20 @@ func daemonCmd() *cobra.Command {
 		Short: "Run the curtailment monitor daemon",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			log := newLogger()
-			cfg, store, eng, err := loadAll()
+			cfg, err := config.Load(cfgFile)
+			if err != nil {
+				return configError{err}
+			}
+			store, err := state.New(cfg.StateFile)
 			if err != nil {
 				return err
 			}
+			eng := engine.New(store, log)
 
-			// Validate recipes at startup
-			if err := eng.ValidateRecipe("curtail", cfg.Grid.Start); err != nil {
-				return fmt.Errorf("invalid curtail recipe: %w", err)
-			}
-			if err := eng.ValidateRecipe("restore", cfg.Grid.Stop); err != nil {
-				return fmt.Errorf("invalid restore recipe: %w", err)
+			// Fail fast on any config problem — reports all issues at once, and
+			// exits EX_CONFIG so systemd won't crashloop on a bad config.
+			if errs := validateConfig(cfg, eng, store, log); len(errs) > 0 {
+				return configError{errors.Join(errs...)}
 			}
 
 			ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
@@ -206,8 +299,8 @@ func daemonCmd() *cobra.Command {
 					Eng:   eng,
 					Start: gridFlowStart,
 					Stop:  gridFlowStop,
-					Log:     log,
-					Label:   "grid",
+					Log:   log,
+					Label: "grid",
 					StatusCheck: func() bool {
 						return store.GetStatus() == state.StatusCurtailed
 					},
@@ -229,12 +322,6 @@ func daemonCmd() *cobra.Command {
 			// Start vacation monitor if configured
 			var vacMon *curtailment.VacationMonitor
 			if len(cfg.Vacation.Start) > 0 || len(cfg.Vacation.Stop) > 0 {
-				if err := eng.ValidateRecipe("vacation-curtail", cfg.Vacation.Start); err != nil {
-					return fmt.Errorf("invalid vacation curtail recipe: %w", err)
-				}
-				if err := eng.ValidateRecipe("vacation-restore", cfg.Vacation.Stop); err != nil {
-					return fmt.Errorf("invalid vacation restore recipe: %w", err)
-				}
 				vacInterval := cfg.Vacation.PollInterval
 				if vacInterval == 0 {
 					vacInterval = 10 * time.Minute
@@ -254,18 +341,10 @@ func daemonCmd() *cobra.Command {
 			var trigRunner *trigger.Runner
 			if len(cfg.Triggers) > 0 {
 				holds := &holdChecker{store: store, sched: sched}
-				for _, tc := range cfg.Triggers {
-					if err := eng.ValidateRecipe("trigger:"+tc.Name, tc.Start); err != nil {
-						return fmt.Errorf("invalid trigger %q start recipe: %w", tc.Name, err)
-					}
-					if err := eng.ValidateRecipe("trigger-stop:"+tc.Name, tc.Stop); err != nil {
-						return fmt.Errorf("invalid trigger %q stop recipe: %w", tc.Name, err)
-					}
-				}
 				var err error
 				trigRunner, err = trigger.New(cfg.Triggers, eng, store, holds, log)
 				if err != nil {
-					return fmt.Errorf("invalid trigger config: %w", err)
+					return configError{fmt.Errorf("invalid trigger config: %w", err)}
 				}
 				go trigRunner.Run(ctx)
 			}

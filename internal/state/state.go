@@ -45,8 +45,10 @@ func New(path string) (*Store, error) {
 		done: make(chan struct{}),
 	}
 
-	// Try to load existing state
-	if data, err := os.ReadFile(path); err == nil {
+	// Try to load existing state. A missing or empty file (e.g. truncated by a
+	// crash mid-write) starts fresh rather than failing — losing state just means
+	// re-deriving it on the next ping, but refusing to start defeats the daemon.
+	if data, err := os.ReadFile(path); err == nil && len(data) > 0 {
 		if err := json.Unmarshal(data, &s.data); err != nil {
 			return nil, fmt.Errorf("parsing state file: %w", err)
 		}
