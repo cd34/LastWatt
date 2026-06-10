@@ -1,4 +1,8 @@
 config.yaml
+config.yaml.*
+!config.yaml.sample
+*.old-*
+*.bak
 /lastwatt
 /lastwatt-arm64
 udptest
