@@ -1,6 +1,10 @@
 # LastWatt
 
-A grid curtailment daemon for Raspberry Pi. Monitors grid power by pinging a device on the grid side (e.g., a Shelly plug). When the device stops responding, grid power is assumed lost and curtailment actions execute. When it returns, those actions are reversed.
+LastWatt is a small daemon — built to run on a Raspberry Pi — that automatically shuts off your home's biggest electrical loads when running them is expensive or impossible, then turns them back on when conditions clear. "Curtailment" is the industry term for deliberately cutting load; LastWatt does it for a house. The canonical target is an electric water heater (often a home's largest single draw), but the same logic drives a pool pump, an EV charger, HVAC setpoints, or anything you can switch with a relay. It watches for the situations where you don't want those loads running — the grid is down and you're on battery or generator, you're in a pricey time-of-use rate window, or you're away on vacation — and switches them off, then restores them the moment every reason to curtail has passed.
+
+People run LastWatt to save money and protect a limited power source without having to think about it. If your utility charges time-of-use rates, it keeps the water heater off during peak-price hours so it reheats on cheap power instead. If you have solar with battery backup or run off a generator during outages, it sheds the heavy loads automatically so your stored power lasts for lights and the fridge instead of being silently drained by a 4,500-watt heating element. It coordinates several independent reasons to curtail at once — grid status, rate schedule, vacation, and custom condition triggers — so a load only comes back when *all* of them agree it's safe, and it includes escape hatches like flow override (restore the water heater the moment someone actually turns on a faucet) so saving energy never means a cold shower. The rest of this README covers setup and configuration.
+
+It works by pinging a device that sits on grid power (e.g., a Shelly plug); when that device stops responding, grid power is assumed lost and curtailment actions execute, and when it returns those actions are reversed. The other modes layer on top of this same start/stop mechanism.
 
 ## Features
 
